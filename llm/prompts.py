@@ -23,9 +23,11 @@ SYSTEM_EXTRACT = (
     "Верни ТОЛЬКО валидный JSON без пояснений, со следующими полями:\n"
     "- networks: массив объектов {id, name, trust}, где trust = \"open\" | \"closed\" | \"unknown\". "
     "Две сети; закрытая — более защищаемая (цех, сегмент, станция, контур), открытая — менее доверенная (офис, общая).\n"
-    "- flows: массив объектов {type, from, to, mode, protocol, port, description, checks, method_open, method_closed}.\n"
+    "- flows: массив объектов {type, from, to, mode, protocol, port, description, recipient, initiator_network_id, checks, method_open, method_closed}.\n"
     "  * type = \"data\" | \"file\";\n"
     "  * from/to — id сетей; direction только по тексту, иначе null;\n"
+    "  * recipient — имя КОНЕЧНОЙ системы-получателя, дословно из текста (например «Контроллер насосов»); для файлов — куда попадают файлы; null, если не названа;\n"
+    "  * initiator_network_id — id сети, которая ИНИЦИИРУЕТ обмен: для двунаправленного — сторона, начинающая соединение; для однонаправленного — сторона-отправитель. Всегда один из from/to;\n"
     "  * mode = \"one-way\" | \"two-way\" | \"unknown\";\n"
     "  * protocol для data: TCP | UDP | MQTT | Modbus TCP | МЭК 104 | null (неизвестно);\n"
     "  * port — число или null;\n"
@@ -40,9 +42,9 @@ SYSTEM_EXTRACT = (
     "\"Насосная станция — закрытая сеть. Диспетчер в общей сети опрашивает контроллер по Modbus TCP 502. Оператор станции шлёт журналы на сервер общей сети по UDP 514, обратно ничего. Сервер общей сети передаёт время станции по NTP, UDP 123.\"\n"
     "Пример выхода:\n"
     '{"networks":[{"id":"closed","name":"Сеть насосной станции","trust":"closed"},{"id":"open","name":"Общая сеть","trust":"open"}],'
-    '"flows":[{"type":"data","from":"open","to":"closed","mode":"two-way","protocol":"Modbus TCP","port":502,"description":"Опрос контроллера диспетчером","checks":[],"method_open":null,"method_closed":null},'
-    '{"type":"data","from":"closed","to":"open","mode":"one-way","protocol":"UDP","port":514,"description":"Журналы на сервер","checks":[],"method_open":null,"method_closed":null},'
-    '{"type":"data","from":"open","to":"closed","mode":"one-way","protocol":"UDP","port":123,"description":"NTP время","checks":[],"method_open":null,"method_closed":null}],'
+    '"flows":[{"type":"data","from":"open","to":"closed","mode":"two-way","protocol":"Modbus TCP","port":502,"description":"Опрос контроллера диспетчером","recipient":"Контроллер насосов","initiator_network_id":"open","checks":[],"method_open":null,"method_closed":null},'
+    '{"type":"data","from":"closed","to":"open","mode":"one-way","protocol":"UDP","port":514,"description":"Журналы на сервер","recipient":"Сервер журналов","initiator_network_id":"closed","checks":[],"method_open":null,"method_closed":null},'
+    '{"type":"data","from":"open","to":"closed","mode":"one-way","protocol":"UDP","port":123,"description":"NTP время","recipient":"Сервер времени станции","initiator_network_id":"open","checks":[],"method_open":null,"method_closed":null}],'
     '"unknowns":[],"assumptions":[]}'
 )
 

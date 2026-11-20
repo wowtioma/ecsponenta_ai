@@ -118,6 +118,23 @@ def _parse_json_lenient(text: str) -> dict:
     raise ValueError("Не удалось распарсить JSON из ответа модели")
 
 
+def _normalize_flows(data: dict) -> None:
+    """Гарантирует поля recipient и initiator_network_id у каждого потока.
+
+    Участок A (core/rules.py) ждёт эти поля на стыке B → A. Если модель их не
+    вернула, initiator_network_id безопасно выводится из from: для
+    двунаправленного правила from — сторона инициатора (ТЗ §10), для
+    однонаправленного — сторона-отправитель.
+    """
+    for f in data.get("flows", []):
+        if not isinstance(f, dict):
+            continue
+        f.setdefault("recipient", None)
+        f.setdefault("initiator_network_id", None)
+        if f.get("initiator_network_id") is None and f.get("from"):
+            f["initiator_network_id"] = f["from"]
+
+
 def extract(
     client: LLMClient,
     text: str,
@@ -145,6 +162,7 @@ def extract(
             data.setdefault("flows", [])
             data.setdefault("unknowns", [])
             data.setdefault("assumptions", [])
+            _normalize_flows(data)
             return data
         except Exception as exc:  # noqa: BLE001
             # Падение LLM не должно ронять сессию — отдаём фолбэк, НО явно помечаем.
