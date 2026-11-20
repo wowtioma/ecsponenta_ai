@@ -1,0 +1,60 @@
+{
+  "networks": [
+    {
+      "id": "closed",
+      "name": "Сеть насосной станции водоканала",
+      "trust": "closed"
+    },
+    {
+      "id": "open",
+      "name": "Общая сеть водоканала",
+      "trust": "open"
+    }
+  ],
+  "flows": [
+    {
+      "type": "data",
+      "from": "open",
+      "to": "closed",
+      "mode": "two-way",
+      "protocol": "Modbus TCP",
+      "port": 502,
+      "description": "Опрос контроллера",
+      "recipient": "Контроллер насосов",
+      "initiator_network_id": "open",
+      "checks": [],
+      "method_open": null,
+      "method_closed": null
+    },
+    {
+      "type": "data",
+      "from": "closed",
+      "to": "open",
+      "mode": "one-way",
+      "protocol": "UDP",
+      "port": 514,
+      "description": "Журналы на сервер",
+      "recipient": "Сервер мониторинга",
+      "initiator_network_id": "closed",
+      "checks": [],
+      "method_open": null,
+      "method_closed": null
+    },
+    {
+      "type": "data",
+      "from": "open",
+      "to": "closed",
+      "mode": "one-way",
+      "protocol": "UDP",
+      "port": 123,
+      "description": "Передача времени NTP",
+      "recipient": "Сервер времени станции",
+      "initiator_network_id": "open",
+      "checks": [],
+      "method_open": null,
+      "method_closed": null
+    }
+  ],
+  "unknowns": [],
+  "assumptions": []
+}
