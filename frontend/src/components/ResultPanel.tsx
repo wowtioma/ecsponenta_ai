@@ -5,7 +5,7 @@ import remarkGfm from "remark-gfm";
 import { useStore } from "../store";
 import RulesTable from "./RulesTable";
 import DiagramPreview from "./DiagramPreview";
-import { fileUsersLabel, plural } from "../lib/format";
+import { fileUsersLabel } from "../lib/format";
 import type { Result } from "../types";
 
 type Tab = "explanation" | "rules" | "diagram";
@@ -17,21 +17,22 @@ const TABS: { id: Tab; label: string }[] = [
 ];
 
 const STATUS_CLS: Record<Result["status"], string> = {
-  needs_clarification: "border-orange-500 bg-orange-500/15 text-orange-300",
-  preliminary: "border-amber-500 bg-amber-500/15 text-amber-300",
-  completed: "border-emerald-500 bg-emerald-500/15 text-emerald-300",
-  unsupported: "border-red-500 bg-red-500/15 text-red-300",
+  needs_clarification:
+    "border-orange-500 bg-orange-500/15 text-orange-300",
+  preliminary:
+    "border-amber-500 bg-amber-500/15 text-amber-300",
+  completed:
+    "border-emerald-500 bg-emerald-500/15 text-emerald-300",
+  unsupported:
+    "border-red-500 bg-red-500/15 text-red-300",
 };
 
-function statusText(r: Result): string {
-  switch (r.status) {
+function statusText(status: Result["status"]): string {
+  switch (status) {
     case "needs_clarification":
-      return "Нужно уточнение";
+      return "Требуется уточнение";
     case "preliminary":
-      return `Предварительная оценка: минимум ${r.rules_count} ${plural(
-        r.rules_count,
-        ["правило", "правила", "правил"]
-      )}`;
+      return "Предварительно";
     case "completed":
       return "Готово";
     case "unsupported":
@@ -54,9 +55,9 @@ function List({
         {title}
       </div>
 
-      <ul className="list-disc space-y-0.5 pl-5 text-sm text-zinc-300">
-        {items.map((x, i) => (
-          <li key={i}>{x}</li>
+      <ul className="list-disc space-y-1 pl-5 text-sm text-zinc-300">
+        {items.map((item, index) => (
+          <li key={`${index}-${item}`}>{item}</li>
         ))}
       </ul>
     </div>
@@ -64,9 +65,31 @@ function List({
 }
 
 export default function ResultPanel() {
-  const { result, explanation, loading } = useStore();
+  const {
+    result,
+    explanation,
+    loading,
+    resultIsStale,
+  } = useStore();
+
   const [tab, setTab] = useState<Tab>("explanation");
 
+  // Пока первый запрос выполняется и результата ещё нет
+  if (!result && loading) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
+        <span className="rounded-full border border-sky-500 bg-sky-500/15 px-3 py-1 text-xs font-medium text-sky-300">
+          Обновляется
+        </span>
+
+        <p className="text-sm text-zinc-400">
+          Анализирую данные и формирую результат…
+        </p>
+      </div>
+    );
+  }
+
+  // Если результата пока нет и запрос не выполняется
   if (!result) {
     return (
       <div className="flex h-full items-center justify-center p-6 text-center text-sm text-zinc-500">
@@ -75,30 +98,39 @@ export default function ResultPanel() {
     );
   }
 
-  const showUnknowns =
-    result.status !== "completed" && result.unknowns.length > 0;
-
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="space-y-2 border-b border-zinc-800 p-3">
+      {/* Статус и основные показатели */}
+      <div className="space-y-3 border-b border-zinc-800 p-3">
         <div className="flex flex-wrap items-center gap-2">
-          <span
-            className={`rounded-full border px-3 py-1 text-xs font-medium ${STATUS_CLS[result.status]}`}
-          >
-            {statusText(result)}
-          </span>
-
-          {loading && (
-            <span className="text-xs text-zinc-400">
+          {loading ? (
+            <span className="rounded-full border border-sky-500 bg-sky-500/15 px-3 py-1 text-xs font-medium text-sky-300">
               Обновляется…
+            </span>
+          ) : (
+            <span
+              className={`rounded-full border px-3 py-1 text-xs font-medium ${
+                STATUS_CLS[result.status]
+              }`}
+            >
+              {statusText(result.status)}
+            </span>
+          )}
+
+          {resultIsStale && (
+            <span className="text-xs text-amber-300">
+              Показан предыдущий результат
             </span>
           )}
         </div>
 
+        {/* Основные показатели */}
         <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-zinc-400">
           <span>
             Правил:{" "}
-            <b className="text-zinc-200">{result.rules_count}</b>
+            <b className="text-zinc-200">
+              {result.rules_count}
+            </b>
           </span>
 
           <span>
@@ -109,53 +141,69 @@ export default function ResultPanel() {
           </span>
         </div>
 
-        {result.status === "needs_clarification" && (
+        {/* Пояснение при обновлении или сохранении старого результата */}
+        {loading && (
+          <p className="text-xs text-sky-300">
+            Выполняется новый запрос. Пока отображается предыдущая
+            конфигурация, она ещё не подтверждена новым ответом.
+          </p>
+        )}
+
+        {!loading && resultIsStale && (
+          <p className="text-xs text-amber-300">
+            Последний запрос не вернул новую конфигурацию.
+            Ниже показан последний рассчитанный результат.
+          </p>
+        )}
+
+        {/* Дополнительные пояснения по статусам */}
+        {!loading && result.status === "needs_clarification" && (
           <p className="text-xs text-orange-300">
             Проект ещё не готов: ответьте на вопросы ассистента в чате.
           </p>
         )}
 
-        {result.status === "unsupported" && (
+        {!loading && result.status === "unsupported" && (
           <p className="text-xs text-red-300">
             Запрос выходит за границы поддерживаемого.
-            Подробности во вкладке «Объяснение».
+            Подробности приведены во вкладке «Объяснение».
           </p>
         )}
 
-        {showUnknowns && (
-          <div className="rounded-lg border border-amber-700/60 bg-amber-950/30 p-2 text-xs text-amber-200">
-            <div className="mb-1 font-medium">
-              Недостающие сведения
-            </div>
+        {/* Неизвестные сведения */}
+        <List
+          title="Недостающие сведения"
+          items={result.unknowns}
+        />
 
-            <ul className="list-disc space-y-0.5 pl-4">
-              {result.unknowns.map((u, i) => (
-                <li key={i}>{u}</li>
-              ))}
-            </ul>
-          </div>
-        )}
+        {/* Принятые допущения видны независимо от выбранной вкладки */}
+        <List
+          title="Принятые допущения"
+          items={result.assumptions}
+        />
       </div>
 
+      {/* Вкладки */}
       <div className="flex gap-1 border-b border-zinc-800 px-3 pt-2">
-        {TABS.map((t) => (
+        {TABS.map((item) => (
           <button
-            key={t.id}
-            onClick={() => setTab(t.id)}
+            key={item.id}
+            onClick={() => setTab(item.id)}
             className={`rounded-t-lg px-3 py-1.5 text-sm ${
-              tab === t.id
+              tab === item.id
                 ? "border-b-2 border-sky-500 text-white"
                 : "text-zinc-400 hover:text-zinc-200"
             }`}
           >
-            {t.label}
+            {item.label}
           </button>
         ))}
       </div>
 
+      {/* Содержимое вкладок */}
       <div
         className={`min-h-0 flex-1 overflow-auto ${
-          loading ? "opacity-60" : ""
+          loading || resultIsStale ? "opacity-60" : ""
         }`}
       >
         {tab === "explanation" && (
@@ -171,23 +219,22 @@ export default function ResultPanel() {
             )}
 
             <List
-              title="Принятые допущения"
-              items={result.assumptions}
+              title="Источники"
+              items={result.sources.map(
+                (source) =>
+                  `${source.file}${
+                    source.section ? `, ${source.section}` : ""
+                  }${
+                    source.page ? `, стр. ${source.page}` : ""
+                  }`
+              )}
             />
-
-            {result.sources.length > 0 && (
-              <List
-                title="Источники"
-                items={result.sources.map(
-                  (s) =>
-                    `${s.file}${s.section ? `, ${s.section}` : ""}${s.page ? `, стр. ${s.page}` : ""}`
-                )}
-              />
-            )}
           </div>
         )}
 
-        {tab === "rules" && <RulesTable result={result} />}
+        {tab === "rules" && (
+          <RulesTable result={result} />
+        )}
 
         {tab === "diagram" && (
           <div className="h-full overflow-auto p-3">

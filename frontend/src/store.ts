@@ -1,3 +1,4 @@
+
 import { create } from "zustand";
 import type { Message, Result } from "./types";
 import { askAi, resetSession } from "./api";
@@ -5,52 +6,111 @@ import { askAi, resetSession } from "./api";
 type State = {
   messages: Message[];
   result: Result | null;
-  explanation: string; // текст ассистента, с которым пришёл последний результат
+  explanation: string;
   loading: boolean;
   lastText: string | null;
-  timings: number[]; // мс на каждый шаг: от отправки до завершённой отрисовки
+  timings: number[];
+
+  // Показывает, что сохранённый результат больше не является
+  // актуальным ответом на последний запрос
+  resultIsStale: boolean;
+
   send: (text: string) => Promise<void>;
   retry: () => Promise<void>;
   reset: () => void;
 };
 
 export const useStore = create<State>((set, get) => {
+  // Защита от записи ответа старого запроса после сброса сессии
+  let activeRequest = 0;
+
   const run = async (text: string) => {
+    const requestId = ++activeRequest;
     const t0 = performance.now();
-    set({ loading: true, lastText: text });
+
+    set((state) => ({
+      loading: true,
+      lastText: text,
+      resultIsStale: state.result !== null,
+    }));
 
     try {
       const reply = await askAi(text, get().result);
+
+      // Игнорируем ответ, если сессия уже была сброшена
+      if (requestId !== activeRequest) return;
+
       const aiMsg: Message = {
         id: crypto.randomUUID(),
         role: "assistant",
         text: reply.text,
         questions: reply.questions ?? undefined,
-        sources: reply.sources ?? undefined,
+        sources:
+          reply.sources?.length
+            ? reply.sources
+            : reply.result?.sources?.length
+              ? reply.result.sources
+              : undefined,
       };
-      set((s) => ({
-        messages: [...s.messages, aiMsg],
-        loading: false,
-        // результат заменяем только если бэкенд прислал новый
-        result: reply.result ?? s.result,
-        explanation: reply.explanation ?? (reply.result ? reply.text : s.explanation),
-      }));
+
+      set((state) => {
+        const hasNewResult = reply.result != null;
+
+        return {
+          messages: [...state.messages, aiMsg],
+          loading: false,
+
+          // Новый результат заменяет предыдущий.
+          // Если результата нет, сохраняем предыдущий.
+          result: reply.result ?? state.result,
+
+          // Объяснение обновляем только вместе с новым результатом,
+          // если сервер отдельно не прислал explanation
+          explanation:
+            reply.explanation ??
+            (hasNewResult ? reply.text : state.explanation),
+
+          // Если новой конфигурации нет, старый результат
+          // остаётся помеченным как предыдущий
+          resultIsStale: !hasNewResult && state.result !== null,
+        };
+      });
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "Неизвестная ошибка";
-      set((s) => ({
+      if (requestId !== activeRequest) return;
+
+      const msg =
+        e instanceof Error
+          ? e.message
+          : "Неизвестная ошибка";
+
+      set((state) => ({
         loading: false,
+        resultIsStale: state.result !== null,
         messages: [
-          ...s.messages,
-          { id: crypto.randomUUID(), role: "assistant", text: msg, isError: true },
+          ...state.messages,
+          {
+            id: crypto.randomUUID(),
+            role: "assistant",
+            text: msg,
+            isError: true,
+          },
         ],
       }));
     } finally {
-      // конец замера: после того как React отрисовал новый результат
-      requestAnimationFrame(() =>
-        requestAnimationFrame(() =>
-          set((s) => ({ timings: [...s.timings, performance.now() - t0] }))
-        )
-      );
+      if (requestId === activeRequest) {
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            if (requestId !== activeRequest) return;
+
+            set((state) => ({
+              timings: [
+                ...state.timings,
+                performance.now() - t0,
+              ],
+            }));
+          });
+        });
+      }
     }
   };
 
@@ -61,24 +121,54 @@ export const useStore = create<State>((set, get) => {
     loading: false,
     lastText: null,
     timings: [],
+    resultIsStale: false,
 
+    // Отправка нового сообщения
     send: async (text) => {
-      const userMsg: Message = { id: crypto.randomUUID(), role: "user", text };
-      set((s) => ({ messages: [...s.messages, userMsg] }));
+      if (get().loading || !text.trim()) return;
+
+      const userMsg: Message = {
+        id: crypto.randomUUID(),
+        role: "user",
+        text,
+      };
+
+      set((state) => ({
+        messages: [...state.messages, userMsg],
+      }));
+
       await run(text);
     },
 
-    // повтор последнего запроса без потери введённых данных
+    // Повтор последнего запроса
     retry: async () => {
       const text = get().lastText;
+
       if (!text || get().loading) return;
-      set((s) => ({ messages: s.messages.filter((m) => !m.isError) }));
+
+      set((state) => ({
+        messages: state.messages.filter((message) => !message.isError),
+      }));
+
       await run(text);
     },
 
+    // Полный сброс сессии
     reset: () => {
+      // Инвалидируем все незавершённые запросы
+      activeRequest++;
+
       resetSession();
-      set({ messages: [], result: null, explanation: "", loading: false, lastText: null, timings: [] });
+
+      set({
+        messages: [],
+        result: null,
+        explanation: "",
+        loading: false,
+        lastText: null,
+        timings: [],
+        resultIsStale: false,
+      });
     },
   };
 });

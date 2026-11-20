@@ -11,8 +11,16 @@ export const ruleSchema = z
   .object({
     id: z.number(),
     type: z.enum(["data", "file"]),
-    from: z.string(),
+        from: z.string(),
     to: z.string(),
+
+    // Конкретные устройства, участвующие в передаче
+    from_device_id: z.string().nullish(),
+    to_device_id: z.string().nullish(),
+
+    // Способ передачи данных
+    transport: z.enum(["network", "usb"]).optional(),
+
     mode: z.enum(["one-way", "two-way"]),
     protocol: z
       .union([
@@ -28,6 +36,10 @@ export const ruleSchema = z
     port: z.number().nullish(),
     description: z.string(),
     justification: z.string().nullish(),
+
+    // Дополнительные параметры файловых правил
+    methods_by_node: z.unknown().optional(),
+    checks_by_node: z.unknown().optional(),
   })
   .passthrough();
 
@@ -71,7 +83,10 @@ export const resultSchema = z
       .nullish(),
     file_users_count: z.number().nullable(),
     file_users_range: z
-      .object({ min: z.number(), max: z.number().nullable() })
+      .object({
+        min: z.number(),
+        max: z.number().nullable(),
+      })
       .nullish(),
     schema_version: z.string().optional(),
     session_id: z.string().optional(),
@@ -91,7 +106,8 @@ export const resultSchema = z
   })
   .passthrough();
 
-// Вопрос ассистента. Варианты «Не знаю» и «Другое» фронт добавляет сам.
+// Вопрос ассистента.
+// Варианты «Не знаю» и «Другое» фронт добавляет самостоятельно.
 export const questionSchema = z.object({
   id: z.string(),
   text: z.string(),
