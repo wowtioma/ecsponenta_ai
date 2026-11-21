@@ -23,29 +23,43 @@ SYSTEM_EXTRACT = (
     "Верни ТОЛЬКО валидный JSON без пояснений, со следующими полями:\n"
     "- networks: массив объектов {id, name, trust}, где trust = \"open\" | \"closed\" | \"unknown\". "
     "Две сети; закрытая — более защищаемая (цех, сегмент, станция, контур), открытая — менее доверенная (офис, общая).\n"
-    "- flows: массив объектов {type, from, to, mode, protocol, port, description, recipient, initiator_network_id, checks, method_open, method_closed}.\n"
+    "- flows: массив объектов {type, from, to, mode, protocol, port, application_protocol, description, recipient, initiator_network_id, reverse_forbidden, source_methods, target_methods, source_checks, target_checks, access_group}.\n"
     "  * type = \"data\" | \"file\";\n"
     "  * from/to — id сетей; direction только по тексту, иначе null;\n"
     "  * recipient — имя КОНЕЧНОЙ системы-получателя, дословно из текста (например «Контроллер насосов»); для файлов — куда попадают файлы; null, если не названа;\n"
     "  * initiator_network_id — id сети, которая ИНИЦИИРУЕТ обмен: для двунаправленного — сторона, начинающая соединение; для однонаправленного — сторона-отправитель. Всегда один из from/to;\n"
     "  * mode = \"one-way\" | \"two-way\" | \"unknown\";\n"
     "  * protocol для data: TCP | UDP | MQTT | Modbus TCP | МЭК 104 | null (неизвестно);\n"
-    "  * port — число или null;\n"
-    "  * для file: method_open/method_closed = \"manual\" | \"pull\" | \"push\" | \"usb\" | null; checks — список требуемых проверок (маска имени, тип/расширение, размер, целостность, ICAP:антивирус, ICAP:песочница, ICAP:DLP) или [].\n"
+    "  * port — целое 1..65535 или null;\n"
+    "  * application_protocol — прикладной протокол, уточняющий транспорт (например \"NTP\" для UDP); иначе null;\n"
+    "  * reverse_forbidden — true, если обратная передача явно запрещена («обратно ничего», «только наружу»); иначе null;\n"
+    "  * для file: source_methods/target_methods — массивы объектов {mode, protocol, storage, trigger} или null, если сторона не определена. mode = \"manual\" | \"USB\" | \"PULL\" | \"PUSH\"; protocol = \"SFTP\" | \"FTP\" | \"SMB\" | null; storage — файловое хранилище/папка или null; trigger = \"arrival\" (доставка при поступлении) | \"schedule\" (забор по расписанию) | null. USB — только если человек приносит файл на флешке;\n"
+    "  * source_checks/target_checks — массивы проверок по сторонам (маска имени, тип/расширение, размер, целостность, ICAP:антивирус, ICAP:песочница, ICAP:DLP); null — сторона не определена; [] — явно без проверок;\n"
+    "  * access_group — \"shared\", если доступ общий или передающий пользователь один; иначе имя группы или null;\n"
+    "  * method_open/method_closed и checks — упрощённый дубль, можно null/[];\n"
+    "- manual_file_users: массив имён людей, которые передают файлы вручную или на USB, или null;\n"
+    "- requests_for_vendor: массив потребностей, которых нет в продукте («встроенный антивирус» и т.п.), или [];\n"
     "- unknowns: список строк — параметры, которых в тексте не хватает (например, протокол, порт, направление, способ передачи файлов, проверки).\n"
     "- assumptions: список явных допущений (обычно пусто).\n\n"
     "Правила:\n"
     "- description пиши КРАТКО (до 6 слов), не переписывай весь запрос.\n"
     "- Для промышленных протоколов MQTT, Modbus TCP, МЭК 104 mode ВСЕГДА \"two-way\" — это свойство протокола, даже если сообщения идут в одну сторону.\n"
+    "- Проверки пиши ТОЛЬКО из списка и по-русски: «маска имени», «тип и расширение», «размер», «целостность», «ICAP: внешний антивирус», «ICAP: песочница», «ICAP: DLP». Не переводи на английский.\n"
+    "- Проверки привязывай к стороне: «перед передачей / на отправке» → source_checks; «после поступления / на приёме» → target_checks. Если сторона не названа — заполни source_checks, а target_checks оставь [].\n"
+    "- Если человек передаёт файлы вручную или на флешке — добавь его роль/имя в manual_file_users.\n"
+    "- Способы файлов: «вручную» → manual; «автоматически попадает/доставляется в хранилище при поступлении» → PUSH (trigger=\"arrival\"); «забирает по расписанию из хранилища» → PULL (trigger=\"schedule\"); «приносит на флешке» → USB.\n"
+    "- source_methods — способы стороны from, target_methods — способы стороны to. Протокол (SFTP/FTP/SMB) бери из текста той стороны.\n"
+    "- USB-поток: from — открытая сеть (к ней обращён Узел А), to — закрытая. USB только на Узле А.\n"
+    "- Не создавай поток, у которого from = to: передача всегда между двумя разными сетями.\n"
     "- Отвечай СТРОГО одним JSON-объектом, без обёрток, без markdown, без пояснений вокруг.\n\n"
     "Пример входа:\n"
     "\"Насосная станция — закрытая сеть. Диспетчер в общей сети опрашивает контроллер по Modbus TCP 502. Оператор станции шлёт журналы на сервер общей сети по UDP 514, обратно ничего. Сервер общей сети передаёт время станции по NTP, UDP 123.\"\n"
     "Пример выхода:\n"
     '{"networks":[{"id":"closed","name":"Сеть насосной станции","trust":"closed"},{"id":"open","name":"Общая сеть","trust":"open"}],'
-    '"flows":[{"type":"data","from":"open","to":"closed","mode":"two-way","protocol":"Modbus TCP","port":502,"description":"Опрос контроллера диспетчером","recipient":"Контроллер насосов","initiator_network_id":"open","checks":[],"method_open":null,"method_closed":null},'
-    '{"type":"data","from":"closed","to":"open","mode":"one-way","protocol":"UDP","port":514,"description":"Журналы на сервер","recipient":"Сервер журналов","initiator_network_id":"closed","checks":[],"method_open":null,"method_closed":null},'
-    '{"type":"data","from":"open","to":"closed","mode":"one-way","protocol":"UDP","port":123,"description":"NTP время","recipient":"Сервер времени станции","initiator_network_id":"open","checks":[],"method_open":null,"method_closed":null}],'
-    '"unknowns":[],"assumptions":[]}'
+    '"flows":[{"type":"data","from":"open","to":"closed","mode":"two-way","protocol":"Modbus TCP","port":502,"application_protocol":null,"description":"Опрос контроллера диспетчером","recipient":"Контроллер насосов","initiator_network_id":"open","reverse_forbidden":null,"source_methods":null,"target_methods":null,"source_checks":null,"target_checks":null,"access_group":null,"checks":[],"method_open":null,"method_closed":null},'
+    '{"type":"data","from":"closed","to":"open","mode":"one-way","protocol":"UDP","port":514,"application_protocol":null,"description":"Журналы на сервер","recipient":"Сервер журналов","initiator_network_id":"closed","reverse_forbidden":true,"source_methods":null,"target_methods":null,"source_checks":null,"target_checks":null,"access_group":null,"checks":[],"method_open":null,"method_closed":null},'
+    '{"type":"data","from":"open","to":"closed","mode":"one-way","protocol":"UDP","port":123,"application_protocol":"NTP","description":"NTP время","recipient":"Сервер времени станции","initiator_network_id":"open","reverse_forbidden":null,"source_methods":null,"target_methods":null,"source_checks":null,"target_checks":null,"access_group":null,"checks":[],"method_open":null,"method_closed":null}],'
+    '"manual_file_users":null,"requests_for_vendor":[],"unknowns":[],"assumptions":[]}'
 )
 
 # Генерация человеческого ответа на основе найденных фактов базы знаний.
