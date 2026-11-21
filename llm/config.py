@@ -173,6 +173,28 @@ SYNONYX_BASE_DIR = Path(
 PRICE_LIMIT_INPUT = 0.10  # USD / 1M
 
 
+def knowledge_base_problem() -> str | None:
+    """Проверяет базу знаний для RAG. Возвращает описание проблемы или None.
+
+    База `synonyx_base` не лежит в репозитории (материалы кейса в .gitignore),
+    поэтому при клонировании легко получить пустой индекс и непонятные
+    падения тестов. Функция нужна для понятного сообщения при старте.
+    """
+    if not SYNONYX_BASE_DIR.is_dir():
+        return (
+            f"Папка базы знаний не найдена: {SYNONYX_BASE_DIR}\n"
+            f"Укажите SYNONYX_BASE_DIR в .env или переменной окружения — "
+            f"путь к каталогу synonyx_base с файлами *.md."
+        )
+    if not any(SYNONYX_BASE_DIR.glob("*.md")):
+        return (
+            f"В папке базы знаний нет файлов *.md: {SYNONYX_BASE_DIR}\n"
+            f"Проверьте SYNONYX_BASE_DIR — там должны лежать "
+            f"00_read_it_first.md, 02_methodology.md и другие материалы кейса."
+        )
+    return None
+
+
 def tariff(model: str) -> tuple[float, float]:
     """Возвращает (вход, выход) в USD/1M. Падает, если модель не заявлена."""
     if model not in MODEL_TARIFFS:
