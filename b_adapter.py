@@ -44,6 +44,15 @@ def session_from_extraction(session_id: str, extraction: dict) -> Session:
             protocol = "NTP"
         if payload == "data" and protocol == "unknown":
             protocol = None
+        recipient = item.get("recipient")
+        if isinstance(recipient, str):
+            label = recipient.strip().casefold().strip('«»"').strip()
+            target_network = networks_by_id.get(target)
+            network_labels = {"офис", "цех", "офисная сеть", "сеть цеха", "открытая сеть", "закрытая сеть"}
+            if target_network:
+                network_labels.add(target_network.name.strip().casefold())
+            if payload == "data" and label in network_labels:
+                recipient = None
         flow = {
             "id": item.get("id") or f"flow-{index}",
             "source_network_id": source,
@@ -51,7 +60,7 @@ def session_from_extraction(session_id: str, extraction: dict) -> Session:
             "payload": payload,
             "direction": MODE.get(item.get("mode")),
             "initiator_network_id": initiator,
-            "recipient": item.get("recipient"),
+            "recipient": recipient,
             "description": description,
             "reverse_forbidden": item.get("reverse_forbidden"),
         }
