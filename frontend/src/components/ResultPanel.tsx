@@ -5,6 +5,7 @@ import remarkGfm from "remark-gfm";
 import { useStore } from "../store";
 import RulesTable from "./RulesTable";
 import DiagramPreview from "./DiagramPreview";
+import DiagramExport from "./DiagramExport";
 import { fileUsersLabel } from "../lib/format";
 import type { Result } from "../types";
 
@@ -238,6 +239,7 @@ export default function ResultPanel() {
 
         {tab === "diagram" && (
           <div className="h-full overflow-auto p-3">
+            <DiagramExport result={result} />
             <DiagramPreview result={result} />
           </div>
         )}
