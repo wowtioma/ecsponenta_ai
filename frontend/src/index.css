@@ -1776,6 +1776,16 @@ body.is-resizing {
     flex-direction: column;
   }
 
+  /*
+   * iOS Safari сам увеличивает страницу при фокусе на поле,
+   * если font-size меньше 16px. На мобильных поднимаем размер,
+   * иначе интерфейс «прыгает» при каждом тапе по полю ввода.
+   */
+  .app-input,
+  .app-input--sm {
+    font-size: 16px;
+  }
+
   .app-chat-section {
     min-height: 480px;
     border-bottom: 1px solid var(--color-border);
