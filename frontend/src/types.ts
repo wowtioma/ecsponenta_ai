@@ -116,9 +116,11 @@ export const questionSchema = z.object({
 
 export const chatResponseSchema = z.object({
   text: z.string(),
+  result_unchanged: z.boolean().optional(),
   explanation: z.string().nullish(),
   questions: z.array(questionSchema).nullish(),
   sources: z.array(sourceSchema).nullish(),
+  usage: usageSchema.nullish(),
   result: resultSchema.nullish(),
 });
 

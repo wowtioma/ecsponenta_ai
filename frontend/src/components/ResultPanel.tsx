@@ -1,11 +1,9 @@
-// dsh-skip-func-length: Компонент панели результата — существующая структура; в этой правке добавлен только блок вкладки «Схема» (переключатель редактор/просмотр), полное разбиение панели — отдельная задача
-
 import { useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useStore } from "../store";
 import RulesTable from "./RulesTable";
-import DiagramPreview from "./DiagramPreview";
+import { diagramDocumentKey } from "../lib/drawioDocument";
 import DrawioEditor from "./DrawioEditor";
 import DiagramExport from "./DiagramExport";
 import { fileUsersLabel } from "../lib/format";
@@ -109,6 +107,8 @@ export default function ResultPanel() {
       </div>
     );
   }
+
+  const documentKey = tab === "diagram" ? diagramDocumentKey(result) : "";
 
   return (
     <div className="app-result">
@@ -279,11 +279,13 @@ export default function ResultPanel() {
               <DiagramExport result={result} />
             </div>
 
-            {diagramMode === "editor" ? (
-              <DrawioEditor result={result} />
-            ) : (
-              <DiagramPreview result={result} />
-            )}
+            <DrawioEditor
+              key={documentKey}
+              documentKey={documentKey}
+              result={result}
+              preview={diagramMode === "preview"}
+              onPreview={() => setDiagramMode("preview")}
+            />
           </div>
         )}
       </div>

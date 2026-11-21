@@ -31,6 +31,13 @@ export async function askAi(message: string, current: Result | null): Promise<Ch
       signal: controller.signal,
     });
 
+    if (res.status === 429) {
+      const body = await res.json().catch(() => null);
+      const message = typeof body?.detail === "string"
+        ? body.detail
+        : "Достигнут лимит Groq. Повторите запрос позже.";
+      throw new Error(message);
+    }
     if (!res.ok) throw new Error(`Сервер вернул ошибку ${res.status}`);
 
     const json = await res.json();

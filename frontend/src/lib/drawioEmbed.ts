@@ -8,8 +8,8 @@
 //   iframe → приложение: { event: "init" }        — редактор готов
 //   приложение → iframe: { action: "load", xml }  — загрузить схему
 //   iframe → приложение: { event: "autosave", xml } — правки сохранились
-//   приложение → iframe: { action: "export", format: "xml" }
-//   iframe → приложение: { event: "export", data } — XML для файла
+//   приложение → iframe: { action: "export", format: "svg" }
+//   iframe → приложение: { event: "export", data } — SVG для просмотра
 //
 // Адрес редактора можно переопределить переменной окружения
 // VITE_DRAWIO_EMBED_URL (например, для собственного self-hosted draw.io).
@@ -31,7 +31,8 @@ const EMBED_PARAMS: Record<string, string> = {
   modified: "1",
   noSaveBtn: "1",
   noExitBtn: "1",
-  autosave: "1",
+  saveAndExit: "0",
+  ui: "min",
 };
 
 /**
@@ -55,9 +56,7 @@ export function buildEditorUrl(dark: boolean): string {
     url.searchParams.set(key, value);
   });
 
-  if (dark) {
-    url.searchParams.set("dark", "1");
-  }
+  url.searchParams.set("dark", dark ? "1" : "0");
 
   return url.toString();
 }
@@ -87,6 +86,7 @@ export interface DrawioMessage {
   data?: string;
   format?: string;
   modified?: boolean;
+  message?: { requestId?: number };
 }
 
 /** Разбирает сообщение от iframe; чужие сообщения возвращают null. */

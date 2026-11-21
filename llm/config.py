@@ -8,10 +8,10 @@ import os
 from pathlib import Path
 
 try:
-    from dotenv import load_dotenv
+    from dotenv import dotenv_values, load_dotenv
     load_dotenv()
-except Exception:  # dotenv не обязателен
-    pass
+except ImportError:  # dotenv не обязателен при конфигурации через окружение
+    dotenv_values = None
 
 # Корень проекта = папка, в которой лежит пакет llm/
 ROOT = Path(__file__).resolve().parent.parent
@@ -82,6 +82,20 @@ GIGACHAT_BASE_URL = os.getenv("GIGACHAT_BASE_URL", "https://gigachat.devices.sbe
 GIGACHAT_MODEL = os.getenv("GIGACHAT_MODEL", "GigaChat-Pro")
 
 
+def _groq_api_key() -> str:
+    values = dotenv_values(ROOT / ".env.groq") if dotenv_values else {}
+    slot = (os.getenv("GROQ_ACTIVE_SLOT") or values.get("GROQ_ACTIVE_SLOT") or "").strip()
+    if not slot:
+        return GROQ_API_KEY
+    if slot not in {"1", "2", "3"}:
+        raise ValueError("GROQ_ACTIVE_SLOT должен быть 1, 2 или 3.")
+    name = f"GROQ_API_KEY_{slot}"
+    key = (os.getenv(name) or values.get(name) or "").strip()
+    if not key:
+        raise ValueError(f"Заполните {name} в локальном файле .env.groq.")
+    return key
+
+
 def active_provider() -> str:
     return LLM_PROVIDER
 
@@ -96,7 +110,7 @@ def resolve_endpoint() -> tuple[str, str, str]:
             YANDEX_API_KEY,
         )
     if LLM_PROVIDER == "groq":
-        return (GROQ_BASE_URL, GROQ_MODEL, GROQ_API_KEY)
+        return (GROQ_BASE_URL, GROQ_MODEL, _groq_api_key())
     if LLM_PROVIDER == "gigachat":
         return (GIGACHAT_BASE_URL, GIGACHAT_MODEL, GIGACHAT_API_KEY)
     return (OPENROUTER_BASE_URL, DEFAULT_MODEL, OPENROUTER_API_KEY)

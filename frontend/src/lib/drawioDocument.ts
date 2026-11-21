@@ -28,6 +28,7 @@ function hashString(value: string): string {
 export function diagramDocumentKey(result: Result): string {
   return hashString(
     JSON.stringify({
+      sessionId: result.session_id,
       networks: result.networks,
       devices: result.devices,
       rules: result.rules,

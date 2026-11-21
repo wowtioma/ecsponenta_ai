@@ -23,9 +23,11 @@ SYSTEM_EXTRACT = (
     "Верни ТОЛЬКО валидный JSON без пояснений, со следующими полями:\n"
     "- networks: массив объектов {id, name, trust}, где trust = \"open\" | \"closed\" | \"unknown\". "
     "Две сети; закрытая — более защищаемая (цех, сегмент, станция, контур), открытая — менее доверенная (офис, общая).\n"
-    "- flows: массив объектов {type, from, to, mode, protocol, port, application_protocol, description, recipient, initiator_network_id, reverse_forbidden, source_methods, target_methods, source_checks, target_checks, access_group}.\n"
+    "- flows: массив объектов {type, from, to, mode, protocol, port, application_protocol, description, source_device, recipient, initiator_network_id, reverse_forbidden, source_methods, target_methods, source_checks, target_checks, access_group}.\n"
     "  * type = \"data\" | \"file\";\n"
     "  * from/to — id сетей; direction только по тексту, иначе null;\n"
+    "  * source_device — имя или роль отправителя из текста, для группы можно указать «три станка»; "
+    "если система не названа или вместо системы используется USB-носитель, null. Название сети не считается устройством.\n"
     "  * recipient — имя КОНЕЧНОЙ системы-получателя, дословно из текста (например «Контроллер насосов»); для файлов — куда попадают файлы; null, если не названа;\n"
     "  * initiator_network_id — id сети, которая ИНИЦИИРУЕТ обмен: для двунаправленного — сторона, начинающая соединение; для однонаправленного — сторона-отправитель. Всегда один из from/to;\n"
     "  * mode = \"one-way\" | \"two-way\" | \"unknown\";\n"
@@ -56,9 +58,9 @@ SYSTEM_EXTRACT = (
     "\"Насосная станция — закрытая сеть. Диспетчер в общей сети опрашивает контроллер по Modbus TCP 502. Оператор станции шлёт журналы на сервер общей сети по UDP 514, обратно ничего. Сервер общей сети передаёт время станции по NTP, UDP 123.\"\n"
     "Пример выхода:\n"
     '{"networks":[{"id":"closed","name":"Сеть насосной станции","trust":"closed"},{"id":"open","name":"Общая сеть","trust":"open"}],'
-    '"flows":[{"type":"data","from":"open","to":"closed","mode":"two-way","protocol":"Modbus TCP","port":502,"application_protocol":null,"description":"Опрос контроллера диспетчером","recipient":"Контроллер насосов","initiator_network_id":"open","reverse_forbidden":null,"source_methods":null,"target_methods":null,"source_checks":null,"target_checks":null,"access_group":null,"checks":[],"method_open":null,"method_closed":null},'
-    '{"type":"data","from":"closed","to":"open","mode":"one-way","protocol":"UDP","port":514,"application_protocol":null,"description":"Журналы на сервер","recipient":"Сервер журналов","initiator_network_id":"closed","reverse_forbidden":true,"source_methods":null,"target_methods":null,"source_checks":null,"target_checks":null,"access_group":null,"checks":[],"method_open":null,"method_closed":null},'
-    '{"type":"data","from":"open","to":"closed","mode":"one-way","protocol":"UDP","port":123,"application_protocol":"NTP","description":"NTP время","recipient":"Сервер времени станции","initiator_network_id":"open","reverse_forbidden":null,"source_methods":null,"target_methods":null,"source_checks":null,"target_checks":null,"access_group":null,"checks":[],"method_open":null,"method_closed":null}],'
+    '"flows":[{"type":"data","from":"open","to":"closed","mode":"two-way","protocol":"Modbus TCP","port":502,"application_protocol":null,"description":"Опрос контроллера диспетчером","source_device":"Диспетчер","recipient":"Контроллер насосов","initiator_network_id":"open","reverse_forbidden":null,"source_methods":null,"target_methods":null,"source_checks":null,"target_checks":null,"access_group":null,"checks":[],"method_open":null,"method_closed":null},'
+    '{"type":"data","from":"closed","to":"open","mode":"one-way","protocol":"UDP","port":514,"application_protocol":null,"description":"Журналы на сервер","source_device":"Оператор станции","recipient":"Сервер журналов","initiator_network_id":"closed","reverse_forbidden":true,"source_methods":null,"target_methods":null,"source_checks":null,"target_checks":null,"access_group":null,"checks":[],"method_open":null,"method_closed":null},'
+    '{"type":"data","from":"open","to":"closed","mode":"one-way","protocol":"UDP","port":123,"application_protocol":"NTP","description":"NTP время","source_device":"Сервер времени общей сети","recipient":"Сервер времени станции","initiator_network_id":"open","reverse_forbidden":null,"source_methods":null,"target_methods":null,"source_checks":null,"target_checks":null,"access_group":null,"checks":[],"method_open":null,"method_closed":null}],'
     '"manual_file_users":null,"requests_for_vendor":[],"unknowns":[],"assumptions":[]}'
 )
 

@@ -40,6 +40,7 @@ class Flow(Model):
     reverse_forbidden: bool | None = None
     initiator_network_id: str | None = None
     recipient: str | None = None
+    source_device: str | None = None
     protocol: str | None = None
     port: int | None = Field(default=None, ge=1, le=65535)
     source_methods: list[FileMethod] | None = None
@@ -260,7 +261,9 @@ def evaluate(session: Session) -> dict:
             rule["port"] = flow.port
             data_groups[key] = rule
             rules.append(rule)
-            rule_details.append({"recipient": flow.recipient, "application_protocol": protocol})
+            endpoint_names = {flow.source_network_id: flow.source_device, flow.target_network_id: flow.recipient}
+            rule_details.append({"recipient": flow.recipient, "application_protocol": protocol,
+                                 "from_device_name": endpoint_names[source], "to_device_name": endpoint_names[target]})
             continue
 
         for field in ("direction", "source_methods", "target_methods", "source_checks", "target_checks", "access_group"):
@@ -377,7 +380,8 @@ def evaluate(session: Session) -> dict:
             rule_details.append({"methods": {
                               source: [m.model_dump(exclude_none=True) for m in send],
                               target: [m.model_dump(exclude_none=True) for m in receive],
-                          }, "access_group": access, "checks_by_node": dict(profile)})
+                          }, "access_group": access, "checks_by_node": dict(profile),
+                             "from_device_name": flow.source_device, "to_device_name": flow.recipient})
 
     if len(rules) > RULE_LIMIT:
         issues.append(f"Требуется {len(rules)} правил при лимите {RULE_LIMIT} на один ПАК.")

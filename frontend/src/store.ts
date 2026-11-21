@@ -80,12 +80,12 @@ export const useStore = create<State>((set, get) => {
 
           // Если новой конфигурации нет, старый результат
           // остаётся помеченным как предыдущий
-          resultIsStale: !hasNewResult && state.result !== null,
+          resultIsStale: !hasNewResult && !reply.result_unchanged && state.result !== null,
 
           // usage в ответе — накопительный итог сессии
           usage: mergeUsage(
             state.usage,
-            reply.result?.usage ?? null,
+            reply.usage ?? reply.result?.usage ?? null,
           ),
         };
       });

@@ -864,7 +864,7 @@ export function buildDrawioXml(result: Result): string {
     <mxGraphModel
       dx="${model.width}"
       dy="${model.height}"
-      grid="1"
+      grid="0"
       gridSize="10"
       guides="1"
       tooltips="1"

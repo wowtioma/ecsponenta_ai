@@ -1,7 +1,5 @@
 """Convert participant B's extraction snapshot into the core's input model."""
 
-import re
-
 from rules import Flow, Network, Session
 
 MODE = {"one-way": "one_way", "two-way": "two_way"}
@@ -37,9 +35,7 @@ def session_from_extraction(session_id: str, extraction: dict) -> Session:
         if fallback:
             # B's regex fallback can attach one text-wide port to every protocol.
             port = None
-        is_ntp = item.get("application_protocol") == "NTP" or re.search(
-            r"\bNTP\b", description or "", re.IGNORECASE
-        )
+        is_ntp = item.get("application_protocol") == "NTP"
         if payload == "data" and protocol == "UDP" and is_ntp:
             protocol = "NTP"
         if payload == "data" and protocol == "unknown":
@@ -53,6 +49,14 @@ def session_from_extraction(session_id: str, extraction: dict) -> Session:
                 network_labels.add(target_network.name.strip().casefold())
             if payload == "data" and label in network_labels:
                 recipient = None
+        source_device = item.get("source_device")
+        if isinstance(source_device, str):
+            source_device = source_device.strip() or None
+            source_network = networks_by_id.get(source)
+            if source_network and source_device and source_device.casefold() == source_network.name.strip().casefold():
+                source_device = None
+        else:
+            source_device = None
         flow = {
             "id": item.get("id") or f"flow-{index}",
             "source_network_id": source,
@@ -61,6 +65,7 @@ def session_from_extraction(session_id: str, extraction: dict) -> Session:
             "direction": MODE.get(item.get("mode")),
             "initiator_network_id": initiator,
             "recipient": recipient,
+            "source_device": source_device,
             "description": description,
             "reverse_forbidden": item.get("reverse_forbidden"),
         }

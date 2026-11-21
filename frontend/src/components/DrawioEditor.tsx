@@ -1,26 +1,5 @@
-// ============================================================
-// ВСТРОЕННЫЙ РЕДАКТОР СХЕМЫ DRAW.IO
-// ============================================================
-//
-// Во вкладке «Схема» вместо статичной картинки открывается
-// настоящий редактор draw.io (embed.diagrams.net в iframe).
-// Схема загружается тем же XML, что уходит в файл .drawio,
-// поэтому блоки устройств, сетей, МЭ и «Синоникса» можно
-// двигать, переименовывать и перекрашивать прямо на сайте.
-//
-// Правки автоматически сохраняются в localStorage, а кнопка
-// «Скачать .drawio» выгружает именно отредактированную схему.
-
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
-
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { Result } from "../types";
-
 import { buildDrawioXml, downloadDrawioXml } from "../lib/exportDrawio";
 import {
   buildEditorUrl,
@@ -30,376 +9,228 @@ import {
 } from "../lib/drawioEmbed";
 import {
   clearStoredDrawioXml,
-  diagramDocumentKey,
   loadDrawioDocument,
   storeDrawioXml,
 } from "../lib/drawioDocument";
-
 import DiagramPreview from "./DiagramPreview";
 
 type EditorStatus = "loading" | "ready" | "unavailable";
 
-// Сколько ждём ответа редактора, прежде чем показать сообщение
-// «редактор недоступен» (нет сети, закрыт embed.diagrams.net и т. п.)
-const INIT_TIMEOUT_MS = 20000;
-
-// Резервное время на ответ экспорта: если draw.io не ответил,
-// скачиваем последнюю сохранённую версию схемы.
-const EXPORT_TIMEOUT_MS = 2500;
+const INIT_TIMEOUT_MS = 20_000;
+const SVG_DATA_URL = /^data:image\/svg\+xml(?:;[^,]*)?,/i;
 
 export default function DrawioEditor({
   result,
+  documentKey,
+  preview,
+  onPreview,
 }: {
   result: Result;
+  documentKey: string;
+  preview: boolean;
+  onPreview: () => void;
 }) {
-  const key = useMemo(() => diagramDocumentKey(result), [result]);
-
-  const [xml, setXml] = useState<string>(() =>
-    loadDrawioDocument(result, key),
-  );
-
-  const xmlRef = useRef(xml);
-  const keyRef = useRef(key);
-
+  const [xml, setXml] = useState(() => loadDrawioDocument(result, documentKey));
+  const [svg, setSvg] = useState<{ url: string; xml: string; frame: string }>();
   const [status, setStatus] = useState<EditorStatus>("loading");
   const [expanded, setExpanded] = useState(false);
-  const [showStatic, setShowStatic] = useState(false);
   const [attempt, setAttempt] = useState(0);
-
   const [dark, setDark] = useState(
     () => document.documentElement.dataset.theme === "dark",
   );
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
-  const readyRef = useRef(false);
-  const exportPendingRef = useRef(false);
+  const xmlRef = useRef(xml);
+  const exportId = useRef(0);
+  const origin = getEditorOrigin();
+  const editorUrl = buildEditorUrl(dark);
+  const frameKey = `${editorUrl}-${attempt}`;
 
-  const origin = useMemo(() => getEditorOrigin(), []);
-  const editorUrl = useMemo(() => buildEditorUrl(dark), [dark]);
+  const post = useCallback((message: object) => {
+    iframeRef.current?.contentWindow?.postMessage(JSON.stringify(message), origin);
+  }, [origin]);
 
-  // Смена конфигурации → новая схема (сохранённые правки, если есть).
-  // Сравниваем ключ документа, чтобы обновление расходов или
-  // служебных полей результата не сбрасывало правки пользователя.
-  useEffect(() => {
-    if (keyRef.current === key) return;
+  const load = useCallback((documentXml: string) => {
+    post({
+      action: "load",
+      xml: documentXml,
+      autosave: 1,
+      fit: true,
+      title: "Схема сети",
+    });
+  }, [post]);
 
-    keyRef.current = key;
-
-    const next = loadDrawioDocument(result, key);
-
-    xmlRef.current = next;
-    setXml(next);
-
-    if (readyRef.current) {
-      iframeRef.current?.contentWindow?.postMessage(
-        JSON.stringify({
-          action: "load",
-          xml: next,
-          autosave: 1,
-          title: "Схема сети",
-        }),
-        origin,
-      );
-    }
-  }, [key, result, origin]);
-
-  // Переключение темы приложения перезагружает iframe с dark=1.
-  // Редактор стартует заново, поэтому сразу показываем загрузку.
   useEffect(() => {
     const observer = new MutationObserver(() => {
-      const nextDark =
-        document.documentElement.dataset.theme === "dark";
-
-      setDark((current) => {
-        if (current === nextDark) return current;
-
-        readyRef.current = false;
+      const next = document.documentElement.dataset.theme === "dark";
+      if (next !== dark) {
         setStatus("loading");
-
-        return nextDark;
-      });
+        setDark(next);
+      }
     });
-
     observer.observe(document.documentElement, {
       attributes: true,
       attributeFilter: ["data-theme"],
     });
-
     return () => observer.disconnect();
-  }, []);
+  }, [dark]);
 
-  // Сообщения от редактора
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
-      if (event.origin !== origin) return;
-
-      if (event.source !== iframeRef.current?.contentWindow) return;
+      if (event.origin !== origin || event.source !== iframeRef.current?.contentWindow) return;
 
       const message = parseDrawioMessage(event.data);
-
-      if (!message) return;
-
-      switch (message.event) {
-        case "init": {
-          readyRef.current = true;
-          setStatus("ready");
-
-          iframeRef.current?.contentWindow?.postMessage(
-            JSON.stringify({
-              action: "load",
-              xml: xmlRef.current,
-              autosave: 1,
-              title: "Схема сети",
-            }),
-            origin,
-          );
-
+      switch (message?.event) {
+        case "init":
+          load(xmlRef.current);
           break;
-        }
-
-        // draw.io присылает актуальный XML после правок
+        case "load":
+          setStatus("ready");
+          break;
         case "autosave":
         case "save": {
           const next = decodeDrawioXml(message.xml);
+          if (!next || next === xmlRef.current) break;
 
-          if (!next) break;
-
+          exportId.current += 1;
           xmlRef.current = next;
           setXml(next);
-          storeDrawioXml(keyRef.current, next);
-
+          storeDrawioXml(documentKey, next);
           break;
         }
-
-        // Ответ на запрос экспорта для скачивания файла
-        case "export": {
-          const exported = decodeDrawioXml(message.data);
-
-          exportPendingRef.current = false;
-
-          downloadDrawioXml(exported || xmlRef.current);
-
-          break;
-        }
-
-        default:
+        case "export":
+          if (
+            message.message?.requestId === exportId.current &&
+            typeof message.data === "string" &&
+            SVG_DATA_URL.test(message.data)
+          ) {
+            setSvg({ url: message.data, xml: xmlRef.current, frame: frameKey });
+          }
           break;
       }
     };
-
     window.addEventListener("message", onMessage);
-
     return () => window.removeEventListener("message", onMessage);
-  }, [origin]);
+  }, [documentKey, frameKey, load, origin]);
 
-  // Если редактор не ответил за отведённое время — сообщаем об этом
+  useEffect(() => {
+    if (!preview || status !== "ready") return;
+    const requestId = ++exportId.current;
+    post({ action: "export", format: "svg", keepTheme: true, requestId });
+  }, [post, preview, status, xml]);
+
   useEffect(() => {
     if (status !== "loading") return;
-
-    const timer = window.setTimeout(() => {
-      setStatus((current) =>
-        current === "loading" ? "unavailable" : current,
-      );
-    }, INIT_TIMEOUT_MS);
-
+    const timer = window.setTimeout(() => setStatus("unavailable"), INIT_TIMEOUT_MS);
     return () => window.clearTimeout(timer);
-  }, [status, editorUrl, attempt]);
+  }, [frameKey, status]);
 
-  // Esc закрывает развёрнутый редактор
+  const isExpanded = expanded && !preview;
   useEffect(() => {
-    if (!expanded) return;
-
+    if (!isExpanded) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") setExpanded(false);
     };
-
     window.addEventListener("keydown", onKeyDown);
-
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [expanded]);
+  }, [isExpanded]);
 
-  const handleDownload = useCallback(() => {
-    const frame = iframeRef.current?.contentWindow;
-
-    if (!frame) {
-      downloadDrawioXml(xml);
-      return;
-    }
-
-    exportPendingRef.current = true;
-
-    frame.postMessage(
-      JSON.stringify({
-        action: "export",
-        format: "xml",
-        xml: xmlRef.current,
-      }),
-      origin,
-    );
-
-    window.setTimeout(() => {
-      if (!exportPendingRef.current) return;
-
-      exportPendingRef.current = false;
-
-      downloadDrawioXml(xml);
-    }, EXPORT_TIMEOUT_MS);
-  }, [origin, xml]);
-
-  const handleReset = useCallback(() => {
-    // Сбрасываем сохранённые правки и просим редактор
-    // загрузить схему, построенную по результату расчёта
-    clearStoredDrawioXml(keyRef.current);
-
+  const reset = () => {
     const generated = buildDrawioXml(result);
-
+    exportId.current += 1;
     xmlRef.current = generated;
     setXml(generated);
+    clearStoredDrawioXml(documentKey);
+    if (status === "ready") load(generated);
+  };
 
-    iframeRef.current?.contentWindow?.postMessage(
-      JSON.stringify({
-        action: "load",
-        xml: generated,
-        autosave: 1,
-        title: "Схема сети",
-      }),
-      origin,
-    );
-  }, [origin, result]);
-
-  const handleRetry = useCallback(() => {
-    setShowStatic(false);
+  const retry = () => {
     setStatus("loading");
     setAttempt((value) => value + 1);
-  }, []);
+  };
 
-  const fullscreenClass = expanded
-    ? " drawio-editor--expanded"
-    : "";
-
-  const frameClass = showStatic
-    ? "drawio-editor drawio-editor--static"
-    : `drawio-editor${fullscreenClass}`;
+  const download = () => downloadDrawioXml(xmlRef.current);
+  const currentSvg = svg?.xml === xml && svg.frame === frameKey ? svg.url : undefined;
 
   return (
-    <div className={frameClass}>
-      <div className="diagram-toolbar">
-        <div className="diagram-card__title">
-          Схема взаимодействия сетей
-          <span className="drawio-editor__badge">draw.io</span>
-        </div>
-
-        <div className="diagram-controls">
-          <button
-            type="button"
-            onClick={handleDownload}
-            className="diagram-btn"
-          >
-            Скачать .drawio
-          </button>
-
-          <button
-            type="button"
-            onClick={handleReset}
-            className="diagram-btn"
-            title="Вернуть схему, построенную по результату расчёта"
-          >
-            Сбросить
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setExpanded((value) => !value)}
-            className="diagram-btn"
-            aria-pressed={expanded}
-          >
-            {expanded ? "Свернуть" : "Развернуть"}
-          </button>
-        </div>
-      </div>
-
-      {showStatic ? (
-        <div className="drawio-editor__static">
-          <div className="drawio-editor__staticbar">
-            <span>
-              Редактор недоступен — показана статичная схема.
-            </span>
-
+    <div className="drawio-workspace">
+      <div
+        className={`diagram-card drawio-editor${isExpanded ? " drawio-editor--expanded" : ""}${preview ? " drawio-editor--hidden" : ""}`}
+        inert={preview}
+        aria-hidden={preview}
+      >
+        <div className="diagram-toolbar">
+          <div className="diagram-card__title">
+            Схема взаимодействия сетей
+            <span className="drawio-editor__badge">draw.io</span>
+          </div>
+          <div className="diagram-controls">
+            <button type="button" onClick={download} className="diagram-btn">
+              Скачать .drawio
+            </button>
             <button
               type="button"
-              onClick={handleRetry}
+              onClick={reset}
               className="diagram-btn"
+              disabled={status === "loading"}
+              title="Вернуть схему, построенную по результату расчёта"
             >
-              Попробовать снова
+              Сбросить
+            </button>
+            <button
+              type="button"
+              onClick={() => setExpanded((value) => !value)}
+              className="diagram-btn"
+              aria-pressed={isExpanded}
+            >
+              {isExpanded ? "Свернуть" : "Развернуть"}
             </button>
           </div>
-
-          <DiagramPreview result={result} />
         </div>
-      ) : (
+
         <div className="drawio-editor__frame">
           <iframe
-            key={`${editorUrl}-${attempt}`}
+            key={frameKey}
             ref={iframeRef}
             src={editorUrl}
             title="Редактор схемы draw.io"
             allow="clipboard-read; clipboard-write"
           />
-
           {status === "loading" && (
-            <div className="drawio-editor__overlay">
+            <div className="drawio-editor__overlay" role="status">
               <span className="drawio-editor__spinner" aria-hidden="true" />
-
               Загружаем редактор draw.io…
             </div>
           )}
-
           {status === "unavailable" && (
             <div className="drawio-editor__overlay drawio-editor__overlay--message">
               <strong>Редактор draw.io не загрузился.</strong>
-
-              <span>
-                Проверьте доступ к embed.diagrams.net (нужен интернет)
-                или откройте статичную схему — её можно скачать
-                в файл .drawio и отредактировать отдельно.
-              </span>
-
+              <span>Для редактирования нужен доступ к embed.diagrams.net.</span>
               <div className="drawio-editor__overlay-actions">
-                <button
-                  type="button"
-                  onClick={handleRetry}
-                  className="diagram-btn"
-                >
+                <button type="button" onClick={retry} className="diagram-btn">
                   Попробовать снова
                 </button>
-
-                <button
-                  type="button"
-                  onClick={() => setShowStatic(true)}
-                  className="diagram-btn"
-                >
-                  Статичная схема
-                </button>
-
-                <button
-                  type="button"
-                  onClick={handleDownload}
-                  className="diagram-btn"
-                >
-                  Скачать .drawio
+                <button type="button" onClick={onPreview} className="diagram-btn">
+                  Открыть просмотр
                 </button>
               </div>
             </div>
           )}
         </div>
-      )}
-
-      <div className="diagram-note">
-        Это полноценный редактор draw.io: блоки можно перетаскивать,
-        переименовывать, менять цвета и добавлять новые элементы.
-        Правки сохраняются в браузере автоматически, кнопка
-        «Скачать .drawio» выгружает отредактированную схему.
+        <div className="diagram-note">
+          Правки сохраняются в этом браузере и входят в файл .drawio.
+          Чтобы изменить расчёт правил, уточните параметры обмена в чате.
+        </div>
       </div>
+
+      {preview && (
+        <DiagramPreview
+          result={result}
+          imageUrl={currentSvg}
+          showingFallback={status !== "ready" || !currentSvg}
+          onDownload={download}
+        />
+      )}
     </div>
   );
 }

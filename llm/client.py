@@ -6,8 +6,10 @@
 """
 from __future__ import annotations
 
+import math
 import time
 import uuid
+from threading import Lock
 from typing import Any
 
 from . import config
@@ -19,6 +21,16 @@ def _num(value: Any, default: int = 0) -> int:
         return int(value or 0)
     except (TypeError, ValueError):
         return default
+
+
+class GroqRateLimit(Exception):
+    def __init__(self, retry_after: int) -> None:
+        self.retry_after = retry_after
+        if retry_after < 60:
+            delay = f"{retry_after} сек."
+        else:
+            delay = f"{math.ceil(retry_after / 60)} мин."
+        super().__init__(f"Достигнут лимит Groq. Повторите запрос через {delay}")
 
 
 class LLMClient:
@@ -37,6 +49,8 @@ class LLMClient:
         self.base_url = base_url or _base
         self.provider = config.active_provider()
         self._client = None
+        self._rate_lock = Lock()
+        self._groq_retry_at = 0.0
 
     def _ensure(self):
         if self._client is None:
@@ -57,6 +71,7 @@ class LLMClient:
                 base_url=self.base_url,
                 api_key=self.api_key,
                 default_headers=headers,
+                **({"max_retries": 0} if self.provider == "groq" else {}),
             )
         return self._client
 
@@ -75,6 +90,32 @@ class LLMClient:
             body["provider"] = routing
         return body
 
+    def _complete(self, client, **kwargs):
+        if self.provider != "groq":
+            return client.chat.completions.create(**kwargs)
+
+        from openai import RateLimitError
+
+        with self._rate_lock:
+            remaining = math.ceil(self._groq_retry_at - time.monotonic())
+        if remaining > 0:
+            raise GroqRateLimit(remaining)
+
+        try:
+            return client.chat.completions.create(**kwargs)
+        except RateLimitError as error:
+            header = error.response.headers.get("retry-after")
+            try:
+                seconds = float(header or "60")
+            except ValueError:
+                seconds = 60
+            seconds = max(1, math.ceil(seconds)) if math.isfinite(seconds) else 60
+            with self._rate_lock:
+                now = time.monotonic()
+                self._groq_retry_at = max(self._groq_retry_at, now + seconds)
+                remaining = math.ceil(self._groq_retry_at - now)
+            raise GroqRateLimit(remaining) from None
+
     def chat(
         self,
         messages: list[dict],
@@ -91,9 +132,10 @@ class LLMClient:
         started = time.time()
 
         extra_body = self._provider_body()
-        if self.provider == "groq" and purpose == "extract":
+        if self.provider == "groq" and purpose in {"extract", "edit_project"}:
             extra_body.update(response_format={"type": "json_object"}, reasoning_effort="low")
-        resp = client.chat.completions.create(
+        resp = self._complete(
+            client,
             model=self.model,
             messages=messages,
             temperature=temperature,

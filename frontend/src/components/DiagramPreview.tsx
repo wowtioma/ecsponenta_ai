@@ -1,18 +1,8 @@
 
-import {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
-import type { WheelEvent } from "react";
+import { useMemo, useState } from "react";
+import { useDiagramViewport } from "../useDiagramViewport";
 
 import type { Result, Rule } from "../types";
-
-import {
-  buildDrawioXml,
-  downloadDrawioXml,
-} from "../lib/exportDrawio";
 
 import {
   buildDiagramModel,
@@ -685,92 +675,32 @@ function RuleFlow({
 
 export default function DiagramPreview({
   result,
+  imageUrl,
+  showingFallback,
+  onDownload,
 }: {
   result: Result;
+  imageUrl?: string;
+  showingFallback: boolean;
+  onDownload: () => void;
 }) {
-  // Общая модель схемы.
-  // Координаты и цвета берутся из diagram.ts.
-  const model = useMemo(
-    () => buildDiagramModel(result),
-    [result],
-  );
-
-  const viewportRef = useRef<HTMLDivElement>(null);
-
-  const [viewportWidth, setViewportWidth] = useState(0);
-  const [zoom, setZoom] = useState<number | null>(null);
-
-  // Определяем ширину области просмотра.
-  useEffect(() => {
-    const element = viewportRef.current;
-
-    if (!element) return;
-
-    const updateWidth = () => {
-      setViewportWidth(element.clientWidth);
-    };
-
-    updateWidth();
-
-    const observer = new ResizeObserver(updateWidth);
-    observer.observe(element);
-
-    return () => observer.disconnect();
-  }, []);
-
-  // Масштаб, при котором схема полностью помещается по ширине.
-  const fitScale = Math.max(
-    0.35,
-    Math.min(
-      1,
-      viewportWidth > 0
-        ? viewportWidth / model.width
-        : 1,
-    ),
-  );
-
-  const scale = zoom ?? fitScale;
-
-  const zoomIn = () => {
-    setZoom((current) =>
-      Math.min(
-        2.5,
-        (current ?? fitScale) + 0.15,
-      ),
-    );
-  };
-
-  const zoomOut = () => {
-    setZoom((current) =>
-      Math.max(
-        0.35,
-        (current ?? fitScale) - 0.15,
-      ),
-    );
-  };
-
-  const fitDiagram = () => {
-    setZoom(fitScale);
-  };
-
-  const handleWheel = (
-    event: WheelEvent<HTMLDivElement>,
-  ) => {
-    if (!event.ctrlKey) return;
-
-    event.preventDefault();
-
-    setZoom((current) =>
-      Math.max(
-        0.35,
-        Math.min(
-          2.5,
-          (current ?? fitScale) +
-            (event.deltaY < 0 ? 0.1 : -0.1),
-        ),
-      ),
-    );
-  };
+  const model = useMemo(() => buildDiagramModel(result), [result]);
+  const [imageSize, setImageSize] = useState<{
+    url: string;
+    width: number;
+    height: number;
+  }>();
+  const actualSize = imageUrl && imageSize?.url === imageUrl ? imageSize : null;
+  const {
+    ref: viewportRef,
+    camera: { x, y, scale },
+    dragging,
+    zoom,
+    reset,
+    startPan,
+    movePan,
+    stopPan,
+  } = useDiagramViewport(actualSize ?? model);
 
   // Уникальные маркеры для правил.
   const arrowRules = Array.from(
@@ -796,9 +726,7 @@ export default function DiagramPreview({
         <div className="diagram-controls">
           <button
             type="button"
-            onClick={() =>
-              downloadDrawioXml(buildDrawioXml(result))
-            }
+            onClick={onDownload}
             className="diagram-btn"
           >
             Скачать .drawio
@@ -806,7 +734,7 @@ export default function DiagramPreview({
 
           <button
             type="button"
-            onClick={zoomOut}
+            onClick={() => zoom(1 / 1.25)}
             className="diagram-btn"
             aria-label="Уменьшить схему"
           >
@@ -819,7 +747,7 @@ export default function DiagramPreview({
 
           <button
             type="button"
-            onClick={zoomIn}
+            onClick={() => zoom(1.25)}
             className="diagram-btn"
             aria-label="Увеличить схему"
           >
@@ -828,7 +756,7 @@ export default function DiagramPreview({
 
           <button
             type="button"
-            onClick={fitDiagram}
+            onClick={reset}
             className="diagram-btn"
           >
             Показать целиком
@@ -839,115 +767,144 @@ export default function DiagramPreview({
       {/* Область отображения SVG */}
       <div
         ref={viewportRef}
-        onWheel={handleWheel}
-        className="diagram-frame"
+        onPointerDown={startPan}
+        onPointerMove={movePan}
+        onPointerUp={stopPan}
+        onPointerCancel={stopPan}
+        onLostPointerCapture={stopPan}
+        className={`diagram-frame${dragging ? " is-dragging" : ""}`}
       >
-        <svg
-          viewBox={`0 0 ${model.width} ${model.height}`}
-          width={model.width * scale}
-          height={model.height * scale}
-          role="img"
-          aria-label="Схема взаимодействия открытой и закрытой сетей через межсетевой экран и Синоникс"
-          className="block max-w-none"
+        <div
+          className="diagram-frame__content"
+          style={{ transform: `translate(${x}px, ${y}px) scale(${scale})` }}
         >
-          {/* Фон */}
-          <rect
-            x={0}
-            y={0}
-            width={model.width}
-            height={model.height}
-            fill={model.background}
-          />
-
-          <defs>
-            {arrowRules.map((item) => (
-              <marker
-                key={item.ruleId}
-                id={getArrowId(item.ruleId)}
-                viewBox="0 0 10 10"
-                refX="8"
-                refY="5"
-                markerWidth="6"
-                markerHeight="6"
-                orient="auto-start-reverse"
-              >
-                <path
-                  d="M 0 0 L 10 5 L 0 10 z"
-                  fill={item.color}
-                />
-              </marker>
-            ))}
-          </defs>
-
-          {/* Заголовок схемы */}
-          <text
-            x={40}
-            y={36}
-            fill={DIAGRAM_THEME.text.primary}
-            fontSize={20}
-            fontWeight={700}
-            fontFamily="Open Sans, Arial, sans-serif"
-          >
-            {model.title}
-          </text>
-
-          <text
-            x={40}
-            y={59}
-            fill={DIAGRAM_THEME.text.secondary}
-            fontSize={12}
-            fontFamily="Open Sans, Arial, sans-serif"
-          >
-            {model.subtitle}
-          </text>
-
-          {/* Сетевые сегменты */}
-          <NetworkSection
-            rect={model.openSegment}
-            title="ОТКРЫТАЯ СЕТЬ"
-            subtitle={model.openNetworkName}
-            color={DIAGRAM_THEME.segment.open}
-          />
-
-          <NetworkSection
-            rect={model.closedSegment}
-            title="ЗАКРЫТЫЙ СЕГМЕНТ"
-            subtitle={model.closedNetworkName}
-            color={DIAGRAM_THEME.segment.closed}
-          />
-
-          {/* Линии передачи рисуются под блоками устройств */}
-          <ConnectionPath model={model} />
-
-          {/* Межсетевой экран */}
-          <FirewallNode model={model.firewall} />
-
-          {/* Устройства */}
-          {model.devices.map((device) => (
-            <DeviceNode
-              key={device.id}
-              device={device}
+          {imageUrl ? (
+            <img
+              src={imageUrl}
+              alt="Схема взаимодействия сетей из редактора draw.io"
+              draggable={false}
+              onLoad={({ currentTarget }) => {
+                if (currentTarget.naturalWidth && currentTarget.naturalHeight) {
+                  setImageSize({
+                    url: imageUrl,
+                    width: currentTarget.naturalWidth,
+                    height: currentTarget.naturalHeight,
+                  });
+                  reset();
+                }
+              }}
             />
-          ))}
+          ) : (
+            <svg
+              viewBox={`0 0 ${model.width} ${model.height}`}
+              width={model.width}
+              height={model.height}
+              role="img"
+              aria-label="Схема взаимодействия открытой и закрытой сетей через межсетевой экран и Синоникс"
+              className="block max-w-none"
+            >
+              {/* Фон */}
+              <rect
+                x={0}
+                y={0}
+                width={model.width}
+                height={model.height}
+                fill={model.background}
+              />
 
-          {/* Синоникс */}
-          <SynonyxSection model={model.synonyx} />
+              <defs>
+                {arrowRules.map((item) => (
+                  <marker
+                    key={item.ruleId}
+                    id={getArrowId(item.ruleId)}
+                    viewBox="0 0 10 10"
+                    refX="8"
+                    refY="5"
+                    markerWidth="6"
+                    markerHeight="6"
+                    orient="auto-start-reverse"
+                  >
+                    <path
+                      d="M 0 0 L 10 5 L 0 10 z"
+                      fill={item.color}
+                    />
+                  </marker>
+                ))}
+              </defs>
 
-          {/* USB-носители */}
-          <UsbNodes model={model} />
+              {/* Заголовок схемы */}
+              <text
+                x={40}
+                y={36}
+                fill={DIAGRAM_THEME.text.primary}
+                fontSize={20}
+                fontWeight={700}
+                fontFamily="Open Sans, Arial, sans-serif"
+              >
+                {model.title}
+              </text>
 
-          {/* Подписи линий располагаются поверх схемы */}
-          <ConnectionLabels model={model} />
+              <text
+                x={40}
+                y={59}
+                fill={DIAGRAM_THEME.text.secondary}
+                fontSize={12}
+                fontFamily="Open Sans, Arial, sans-serif"
+              >
+                {model.subtitle}
+              </text>
 
-          {/* Нижняя информация и легенда */}
-          <DiagramLegend model={model} />
-        </svg>
+              {/* Сетевые сегменты */}
+              <NetworkSection
+                rect={model.openSegment}
+                title="ОТКРЫТАЯ СЕТЬ"
+                subtitle={model.openNetworkName}
+                color={DIAGRAM_THEME.segment.open}
+              />
+
+              <NetworkSection
+                rect={model.closedSegment}
+                title="ЗАКРЫТЫЙ СЕГМЕНТ"
+                subtitle={model.closedNetworkName}
+                color={DIAGRAM_THEME.segment.closed}
+              />
+
+              {/* Линии передачи рисуются под блоками устройств */}
+              <ConnectionPath model={model} />
+
+              {/* Межсетевой экран */}
+              <FirewallNode model={model.firewall} />
+
+              {/* Устройства */}
+              {model.devices.map((device) => (
+                <DeviceNode
+                  key={device.id}
+                  device={device}
+                />
+              ))}
+
+              {/* Синоникс */}
+              <SynonyxSection model={model.synonyx} />
+
+              {/* USB-носители */}
+              <UsbNodes model={model} />
+
+              {/* Подписи линий располагаются поверх схемы */}
+              <ConnectionLabels model={model} />
+
+              {/* Нижняя информация и легенда */}
+              <DiagramLegend model={model} />
+            </svg>
+          )}
+        </div>
       </div>
 
       <div className="diagram-note">
-        Управление схемой: кнопки масштабирования или Ctrl + прокрутка
-        колеса мыши. Кнопка «Показать целиком» подбирает масштаб
-        для отображения всей схемы.
+        Перетаскивайте схему мышью. Колесо приближает и отдаляет схему
+        в точке под курсором.
+        {showingFallback && (
+          <div>Показана схема по результату расчёта. Сохранённые правки входят в файл .drawio.</div>
+        )}
       </div>
 
       {/* Список правил */}

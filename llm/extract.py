@@ -16,7 +16,7 @@ import re
 from typing import Any
 
 from . import prompts
-from .client import LLMClient
+from .client import GroqRateLimit, LLMClient
 
 logger = logging.getLogger("llm.extract")
 
@@ -448,6 +448,8 @@ def extract(
             data.setdefault("assumptions", [])
             _normalize_flows(data, text)
             return data
+        except GroqRateLimit:
+            raise
         except Exception as exc:  # noqa: BLE001
             # Падение LLM не должно ронять сессию — отдаём фолбэк, НО явно помечаем.
             data = quick_extract(text)

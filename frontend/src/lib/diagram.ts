@@ -477,13 +477,45 @@ export function buildDiagramModel(
   const closedNetworkName =
     closedNetwork?.name ?? "Закрытый сегмент";
 
-  const openDevicesSource = result.devices.filter(
-    (device) => device.network_id === openNetwork?.id,
-  );
+  const schemaDevices = [...result.devices];
+  const knownDevices = new Map(schemaDevices.map((device) => [device.id, device]));
+  const fallbackByNetwork = new Map<string, Partial<Record<"from" | "to", string>>>();
 
-  const closedDevicesSource = result.devices.filter(
-    (device) => device.network_id === closedNetwork?.id,
-  );
+  const resolveEndpoint = (rule: Rule, side: "from" | "to") => {
+    const id = side === "from" ? rule.from_device_id : rule.to_device_id;
+    const networkId = rule[side];
+    const device = id ? knownDevices.get(id) : undefined;
+    if (device?.network_id === networkId) return device.id;
+    return fallbackByNetwork.get(networkId)?.[side];
+  };
+
+  // A calculated route can cross two known networks even when an endpoint
+  // is unnamed. Label that endpoint as unknown in the drawing only.
+  for (const rule of result.rules) {
+    if (rule.transport === "usb") continue;
+    for (const side of ["from", "to"] as const) {
+      const networkId = rule[side];
+      if (
+        !networkId ||
+        (networkId !== openNetwork?.id && networkId !== closedNetwork?.id) ||
+        resolveEndpoint(rule, side)
+      ) continue;
+
+      let id = `unknown-${side}-${networkId}`;
+      while (knownDevices.has(id)) id += "-";
+      const device = {
+        id,
+        network_id: networkId,
+        name: side === "from" ? "Источник не указан" : "Получатель не указан",
+      };
+      schemaDevices.push(device);
+      knownDevices.set(id, device);
+      fallbackByNetwork.set(networkId, { ...fallbackByNetwork.get(networkId), [side]: id });
+    }
+  }
+
+  const openDevicesSource = schemaDevices.filter((device) => device.network_id === openNetwork?.id);
+  const closedDevicesSource = schemaDevices.filter((device) => device.network_id === closedNetwork?.id);
 
   // ----------------------------------------------------------
   // 1. Устройства и их координаты
@@ -767,19 +799,9 @@ export function buildDiagramModel(
       return;
     }
 
-    const source = rule.from_device_id
-      ? deviceById.get(rule.from_device_id)
-      : undefined;
-
-    const target = rule.to_device_id
-      ? deviceById.get(rule.to_device_id)
-      : undefined;
-
-    // Без конкретных устройств маршрут нельзя построить достоверно.
-    // Само правило при этом остаётся в легенде и JSON.
-    if (!source || !target) {
-      return;
-    }
+    const source = deviceById.get(resolveEndpoint(rule, "from") ?? "");
+    const target = deviceById.get(resolveEndpoint(rule, "to") ?? "");
+    if (!source || !target) return;
 
     const sourceSide = source.side;
     const targetSide = target.side;
