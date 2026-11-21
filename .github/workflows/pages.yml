@@ -13,6 +13,7 @@ name: Deploy web demo
 on:
   push:
     branches:
+      - web
       - "С"
       - integration
       - main
