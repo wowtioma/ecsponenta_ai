@@ -1,52 +1,104 @@
+import type { CSSProperties } from "react";
 import Chat from "./components/Chat";
+import PanelSplitter from "./components/PanelSplitter";
 import ResultPanel from "./components/ResultPanel";
+import ThemeToggle from "./components/ThemeToggle";
 import { useStore } from "./store";
+import { usePanelWidth } from "./usePanelWidth";
 
 export default function App() {
   const { timings, reset } = useStore();
-  const last = timings.length ? timings[timings.length - 1] / 1000 : null;
-  const avg = timings.length ? timings.reduce((a, b) => a + b, 0) / timings.length / 1000 : null;
+
+  const {
+    width,
+    collapsed,
+    setWidth,
+    adjust,
+    resetWidth,
+    toggleCollapsed,
+  } = usePanelWidth();
+
+  const last = timings.length
+    ? timings[timings.length - 1] / 1000
+    : null;
+
+  const avg = timings.length
+    ? timings.reduce((a, b) => a + b, 0) / timings.length / 1000
+    : null;
 
   return (
-    <div className="flex h-screen flex-col bg-black text-white">
-      
-<header className="flex items-center justify-between border-b border-zinc-800 px-4 py-3">
-  {/* Логотип и название */}
-  <div className="flex min-w-0 items-center gap-3">
-    <img
-      src="/logo_shield.png"
-      alt="Логотип Синоникс"
-      className="h-10 w-10 shrink-0 object-contain"
-    />
+    <div className="app-shell">
+      <header className="app-header">
+        <div className="app-header__brand">
+          <img
+            src="/logo_shield.png"
+            alt="Логотип Синоникс"
+            className="app-header__logo"
+          />
 
-    <span className="text-sm font-semibold sm:text-base">
-      ИИ-ассистент по размещению «Синоникса»
-    </span>
-  </div>
+          <div className="app-header__titles">
+            <span className="app-header__title">
+              <span className="app-header__title-full">
+                ИИ-ассистент по размещению «Синоникса»
+              </span>
 
-  {/* Правая часть шапки */}
-  <div className="flex shrink-0 items-center gap-4">
-    {last !== null && avg !== null && (
-      <span className="text-xs text-zinc-500">
-        Шаг: {last.toFixed(1)} с · среднее: {avg.toFixed(1)} с
-      </span>
-    )}
+              <span className="app-header__title-short">
+                ИИ-ассистент «Синоникс»
+              </span>
+            </span>
 
-    <button
-      onClick={reset}
-      className="rounded-lg border border-zinc-600 px-3 py-1 text-sm hover:bg-zinc-900"
-    >
-      Новая сессия
-    </button>
-  </div>
-</header>
+            <span className="app-header__subtitle">
+              Расчёт правил обмена между двумя сетями
+            </span>
+          </div>
+        </div>
 
+        <div className="app-header__right">
+          {last !== null && avg !== null && (
+            <span className="app-header__timings">
+              Шаг: {last.toFixed(1)} с · среднее: {avg.toFixed(1)} с
+            </span>
+          )}
 
-      <main className="grid min-h-0 flex-1 grid-cols-[minmax(360px,1fr)_minmax(520px,1.3fr)]">
-        <section className="min-h-0 min-w-0 border-r border-zinc-800">
+          <ThemeToggle />
+
+          <button
+            type="button"
+            onClick={reset}
+            className="app-button app-button-outline app-button-sm"
+          >
+            Новая сессия
+          </button>
+        </div>
+      </header>
+
+      <main
+        className="app-main"
+        style={
+          { "--result-width": `${width}px` } as CSSProperties
+        }
+      >
+        <section className="app-chat-section" aria-label="Чат с ассистентом">
           <Chat />
         </section>
-        <section className="min-h-0 min-w-0">
+
+        <PanelSplitter
+          width={width}
+          collapsed={collapsed}
+          onResize={setWidth}
+          onStep={adjust}
+          onToggleCollapsed={toggleCollapsed}
+          onReset={resetWidth}
+        />
+
+        <section
+          className={
+            collapsed
+              ? "app-result-section is-collapsed"
+              : "app-result-section"
+          }
+          aria-label="Результат расчёта"
+        >
           <ResultPanel />
         </section>
       </main>

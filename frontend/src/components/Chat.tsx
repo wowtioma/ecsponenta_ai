@@ -4,6 +4,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useStore } from "../store";
 import type { Question } from "../types";
+import UsageFooter from "./UsageFooter";
 
 const UNKNOWN = "Не знаю";
 const OTHER = "Другое";
@@ -51,23 +52,22 @@ function QuestionCard({
   };
 
   return (
-    <div className="mt-3 space-y-4">
+    <div className="app-message__questions">
       {questions.map((q) => (
         <div key={q.id}>
-          <div className="mb-2 text-sm font-medium">{q.text}</div>
+          <div className="app-question__text">{q.text}</div>
 
-          <div className="flex flex-wrap gap-2">
+          <div className="app-question__options">
             {[...q.options, UNKNOWN, OTHER].map((opt) => (
               <button
                 key={opt}
+                type="button"
                 disabled={sent || disabled}
                 onClick={() =>
                   setAnswers((a) => ({ ...a, [q.id]: opt }))
                 }
-                className={`rounded-full border px-3 py-1 text-xs disabled:opacity-50 ${
-                  answers[q.id] === opt
-                    ? "border-sky-500 bg-sky-600/30"
-                    : "border-zinc-600 hover:bg-zinc-800"
+                className={`app-chip${
+                  answers[q.id] === opt ? " app-chip--active" : ""
                 }`}
               >
                 {opt}
@@ -86,7 +86,7 @@ function QuestionCard({
                 }))
               }
               placeholder="Ваш вариант…"
-              className="mt-2 w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm disabled:opacity-50"
+              className="app-input app-input--sm app-question__input"
             />
           )}
         </div>
@@ -94,9 +94,10 @@ function QuestionCard({
 
       {!sent && (
         <button
+          type="button"
           disabled={!ready || disabled}
           onClick={submit}
-          className="rounded-lg bg-sky-600 px-4 py-1.5 text-sm font-medium disabled:opacity-40"
+          className="app-button app-button-primary app-button-sm app-question__submit"
         >
           Ответить
         </button>
@@ -108,10 +109,15 @@ function QuestionCard({
 export default function Chat() {
   const { messages, loading, send, retry } = useStore();
   const [text, setText] = useState("");
-  const bottom = useRef<HTMLDivElement>(null);
+  const logRef = useRef<HTMLDivElement>(null);
 
+  // Прокручиваем только ленту чата, не трогая страницу
   useEffect(() => {
-    bottom.current?.scrollIntoView({ behavior: "smooth" });
+    const log = logRef.current;
+
+    if (!log) return;
+
+    log.scrollTo({ top: log.scrollHeight, behavior: "smooth" });
   }, [messages, loading]);
 
   const submit = () => {
@@ -124,25 +130,26 @@ export default function Chat() {
   };
 
   return (
-    <div className="flex h-full flex-col">
-      <div className="flex-1 space-y-4 overflow-y-auto p-4">
+    <div className="app-chat">
+      <div className="app-chat__log" ref={logRef}>
         {messages.length === 0 && (
-          <div className="space-y-3 text-sm text-zinc-300">
+          <div className="app-intro">
             <p>
               Я помогу понять, где в вашей инфраструктуре поставить
               «Синоникс» и сколько правил передачи понадобится.
               Опишите две сети и что между ними нужно передавать.
             </p>
 
-            <p className="text-zinc-400">
+            <p className="app-intro__muted">
               Если чего-то не знаете, не страшно: я задам
               уточняющие вопросы.
             </p>
 
             <button
+              type="button"
               onClick={() => setText(EXAMPLE)}
               disabled={loading}
-              className="rounded-lg border border-zinc-600 px-3 py-1.5 text-xs hover:bg-zinc-900 disabled:opacity-50"
+              className="app-button app-button-outline app-button-sm"
             >
               Подставить пример
             </button>
@@ -152,28 +159,29 @@ export default function Chat() {
         {messages.map((m) => (
           <div
             key={m.id}
-            className={m.role === "user" ? "flex justify-end" : ""}
+            className={`app-message app-message--${m.role}${
+              m.isError ? " app-message--error" : ""
+            }`}
           >
-            <div
-              className={`max-w-[85%] rounded-2xl px-4 py-2 text-sm ${
-                m.role === "user" ? "bg-zinc-800" : ""
-              } ${m.isError ? "border border-red-900 text-red-300" : ""}`}
-            >
+            <div className="app-message__bubble">
               {m.role === "assistant" && (
-                <div className="mb-1 text-xs text-sky-400">
+                <div className="app-message__author">
                   ИИ-ассистент
                 </div>
               )}
 
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                {m.text}
-              </ReactMarkdown>
+              <div className="app-markdown">
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                  {m.text}
+                </ReactMarkdown>
+              </div>
 
               {m.isError && (
                 <button
+                  type="button"
                   onClick={retry}
                   disabled={loading}
-                  className="mt-2 rounded-lg border border-red-800 px-3 py-1 text-xs hover:bg-red-950 disabled:opacity-40"
+                  className="app-button app-button-outline app-button-sm app-message__retry"
                 >
                   Повторить
                 </button>
@@ -188,7 +196,7 @@ export default function Chat() {
               )}
 
               {m.sources && m.sources.length > 0 && (
-                <ul className="mt-2 space-y-0.5 text-xs text-zinc-500">
+                <ul className="app-message__sources">
                   {m.sources.map((s, i) => (
                     <li key={i}>
                       Источник: {s.file}
@@ -203,43 +211,52 @@ export default function Chat() {
         ))}
 
         {loading && (
-          <div>
-            <div className="mb-1 text-xs text-sky-400">
-              ИИ-ассистент
-            </div>
+          <div className="app-message app-message--assistant">
+            <div className="app-message__bubble">
+              <div className="app-message__author">
+                ИИ-ассистент
+              </div>
 
-            <div className="flex items-center gap-1 text-sm text-zinc-400">
-              <span className="h-2 w-2 animate-bounce rounded-full bg-zinc-400 [animation-delay:-0.3s]" />
-              <span className="h-2 w-2 animate-bounce rounded-full bg-zinc-400 [animation-delay:-0.15s]" />
-              <span className="h-2 w-2 animate-bounce rounded-full bg-zinc-400" />
-              <span className="ml-2">
-                Анализирую сети и подбираю решение…
-              </span>
+              <div className="app-typing">
+                <span className="app-typing__dot" />
+                <span className="app-typing__dot" />
+                <span className="app-typing__dot" />
+
+                <span className="app-typing__text">
+                  Анализирую сети и подбираю решение…
+                </span>
+              </div>
             </div>
           </div>
         )}
-
-        <div ref={bottom} />
       </div>
 
-      <div className="flex gap-2 border-t border-zinc-800 p-3">
+      <form
+        className="app-composer"
+        onSubmit={(event) => {
+          event.preventDefault();
+          submit();
+        }}
+      >
         <input
           value={text}
           onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && submit()}
           placeholder="Опишите ваши сети и потоки данных…"
           disabled={loading}
-          className="flex-1 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm disabled:opacity-50"
+          className="app-input"
+          aria-label="Сообщение ассистенту"
         />
 
         <button
-          onClick={submit}
+          type="submit"
           disabled={loading || !text.trim()}
-          className="rounded-lg bg-sky-600 px-4 text-sm font-medium disabled:opacity-40"
+          className="app-button app-button-primary"
         >
           Отправить
         </button>
-      </div>
+      </form>
+
+      <UsageFooter />
     </div>
   );
 }

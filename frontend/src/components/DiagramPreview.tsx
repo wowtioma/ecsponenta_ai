@@ -10,6 +10,11 @@ import type { WheelEvent } from "react";
 import type { Result, Rule } from "../types";
 
 import {
+  buildDrawioXml,
+  downloadDrawioXml,
+} from "../lib/exportDrawio";
+
+import {
   buildDiagramModel,
   DIAGRAM_THEME,
   getDeviceName,
@@ -626,14 +631,13 @@ function RuleFlow({
 
   return (
     <div
-      className="rounded-lg border border-slate-600 bg-[#354552] p-3"
+      className="diagram-rule"
       style={{
-        borderLeftWidth: 4,
         borderLeftColor: color,
       }}
     >
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="text-xs font-semibold text-white">
+      <div className="diagram-rule__head">
+        <div className="diagram-rule__title">
           <span style={{ color }}>● </span>
           Правило №{rule.id}
           {" · "}
@@ -641,31 +645,31 @@ function RuleFlow({
           {isUsb ? " · USB" : ""}
         </div>
 
-        <span className="rounded-full bg-[#303E48] px-2 py-1 text-[10px] text-slate-300">
+        <span className="diagram-rule__mode">
           {isTwoWay
             ? "Двунаправленное"
             : "Однонаправленное"}
         </span>
       </div>
 
-      <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
-        <span className="text-white">{from}</span>
+      <div className="diagram-rule__flow">
+        <span>{from}</span>
 
         <span
-          className="font-semibold"
+          className="diagram-rule__arrow"
           style={{ color }}
         >
           {isTwoWay ? "↔" : "→"}
         </span>
 
-        <span className="text-white">{to}</span>
+        <span>{to}</span>
       </div>
 
-      <div className="mt-2 text-xs text-slate-300">
+      <div className="diagram-rule__desc">
         {rule.description}
       </div>
 
-      <div className="mt-1 text-xs text-slate-400">
+      <div className="diagram-rule__meta">
         {getProtocolLabel(rule)}
         {rule.port != null
           ? ` · порт ${rule.port}`
@@ -782,31 +786,41 @@ export default function DiagramPreview({
   );
 
   return (
-    <div className="space-y-4 rounded-xl bg-[#303E48] p-4">
+    <div className="diagram-card">
       {/* Заголовок и управление масштабом */}
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="text-sm font-semibold text-white">
+      <div className="diagram-toolbar">
+        <div className="diagram-card__title">
           Схема взаимодействия сетей
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="diagram-controls">
+          <button
+            type="button"
+            onClick={() =>
+              downloadDrawioXml(buildDrawioXml(result))
+            }
+            className="diagram-btn"
+          >
+            Скачать .drawio
+          </button>
+
           <button
             type="button"
             onClick={zoomOut}
-            className="rounded-lg border border-slate-500 px-3 py-1.5 text-sm text-white hover:bg-[#4A5D6A]"
+            className="diagram-btn"
             aria-label="Уменьшить схему"
           >
             −
           </button>
 
-          <span className="min-w-12 text-center text-xs text-slate-300">
+          <span className="diagram-zoom">
             {Math.round(scale * 100)}%
           </span>
 
           <button
             type="button"
             onClick={zoomIn}
-            className="rounded-lg border border-slate-500 px-3 py-1.5 text-sm text-white hover:bg-[#4A5D6A]"
+            className="diagram-btn"
             aria-label="Увеличить схему"
           >
             +
@@ -815,7 +829,7 @@ export default function DiagramPreview({
           <button
             type="button"
             onClick={fitDiagram}
-            className="rounded-lg border border-slate-500 px-3 py-1.5 text-xs text-white hover:bg-[#4A5D6A]"
+            className="diagram-btn"
           >
             Показать целиком
           </button>
@@ -826,7 +840,7 @@ export default function DiagramPreview({
       <div
         ref={viewportRef}
         onWheel={handleWheel}
-        className="max-h-[70vh] overflow-auto rounded-lg border border-slate-600 bg-[#303E48]"
+        className="diagram-frame"
       >
         <svg
           viewBox={`0 0 ${model.width} ${model.height}`}
@@ -930,7 +944,7 @@ export default function DiagramPreview({
         </svg>
       </div>
 
-      <div className="text-xs text-slate-400">
+      <div className="diagram-note">
         Управление схемой: кнопки масштабирования или Ctrl + прокрутка
         колеса мыши. Кнопка «Показать целиком» подбирает масштаб
         для отображения всей схемы.
@@ -939,11 +953,11 @@ export default function DiagramPreview({
       {/* Список правил */}
       {result.rules.length > 0 && (
         <div>
-          <div className="mb-2 text-sm font-semibold text-white">
+          <div className="diagram-card__title diagram-card__title--block">
             Потоки передачи через Синоникс
           </div>
 
-          <div className="grid gap-2">
+          <div className="diagram-rules">
             {result.rules.map((rule, index) => (
               <RuleFlow
                 key={rule.id}
@@ -957,12 +971,12 @@ export default function DiagramPreview({
       )}
 
       {/* Нижнее пояснение */}
-      <div className="border-t border-slate-600 pt-3 text-xs text-slate-300">
-        <div className="font-semibold text-white">
+      <div className="diagram-footer">
+        <div className="diagram-footer__title">
           Правил Синоникса: {result.rules_count}
         </div>
 
-        <p className="mt-1">
+        <p className="diagram-footer__text">
           Межсетевой экран обеспечивает фильтрацию трафика.
           Синоникс размещается в закрытом сегменте за МЭ.
           USB-носитель подключается к Узлу А в обход межсетевого экрана.

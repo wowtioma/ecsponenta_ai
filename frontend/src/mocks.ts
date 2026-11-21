@@ -1,5 +1,35 @@
 
-import type { ChatResponse, Result } from "./types";
+import type { ChatResponse, Result, Usage } from "./types";
+
+// Демонстрационные расходы для mock-режима.
+// Фактические значения приходят из usage результата бэкенда.
+function mockUsage(
+  callId: string,
+  inputTokens: number,
+  outputTokens: number,
+  inputCostUsd: number,
+  outputCostUsd: number,
+): Usage {
+  return {
+    status: "measured",
+    input_tokens: inputTokens,
+    output_tokens: outputTokens,
+    input_cost_usd: inputCostUsd,
+    output_cost_usd: outputCostUsd,
+    evaluation_cost_usd: inputCostUsd + outputCostUsd,
+    actual_cost_usd: null,
+    calls: [
+      {
+        call_id: callId,
+        model_id: "openai/gpt-oss-20b",
+        purpose: "answer",
+        input_tokens: inputTokens,
+        output_tokens: outputTokens,
+        cost_total_usd: inputCostUsd + outputCostUsd,
+      },
+    ],
+  };
+}
 
 const f02: Result = {
   networks: [
@@ -114,7 +144,13 @@ const f02: Result = {
   ],
 
   requests_for_vendor: [],
-  usage: null,
+  usage: mockUsage(
+    "mock-f02",
+    12480,
+    2140,
+    0.00125,
+    0.00107,
+  ),
 };
 
 const n01: Result = {
@@ -168,7 +204,13 @@ const n01: Result = {
   devices: [],
   sources: [],
   requests_for_vendor: [],
-  usage: null,
+  usage: mockUsage(
+    "mock-n01",
+    9820,
+    1580,
+    0.00098,
+    0.00079,
+  ),
 };
 
 // Определение выбранных проверок файлов
@@ -266,6 +308,14 @@ function createUsbResult(
     assumptions: [],
 
     devices: [],
+
+    usage: mockUsage(
+      "mock-usb",
+      7180,
+      1220,
+      0.00072,
+      0.00061,
+    ),
   };
 }
 

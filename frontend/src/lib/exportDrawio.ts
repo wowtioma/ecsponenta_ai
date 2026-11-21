@@ -713,25 +713,23 @@ function createLegend(
 // ============================================================
 // ПОЛНАЯ ГЕНЕРАЦИЯ XML
 // ============================================================
+//
+// buildDrawioXml используется и кнопкой «Скачать .drawio»,
+// и встроенным редактором draw.io (DrawioEditor): в редактор
+// загружается тот же XML, что и в файл.
+// Сборка разбита на части, чтобы функции оставались читаемыми,
+// а порядок ячеек совпадал с порядком отрисовки на схеме.
 
-function createDiagramXml(result: Result): string {
-  // ВАЖНО:
-  // Используем ту же модель, что и DiagramPreview.tsx.
-  const model = buildDiagramModel(result);
-
-  const cells: string[] = [];
-
-  // Корневые элементы mxGraph
-  cells.push(`
+/** Корневые ячейки, фон, заголовки и сетевые сегменты. */
+function createHeaderCells(model: DiagramModel): string[] {
+  return [
+    // Корневые элементы mxGraph
+    `
     <mxCell id="0"/>
     <mxCell id="1" parent="0"/>
-  `);
+  `,
 
-  // ----------------------------------------------------------
-  // Фон
-  // ----------------------------------------------------------
-
-  cells.push(
+    // Фон
     createVertex(
       "diagram-background",
       "",
@@ -744,13 +742,8 @@ function createDiagramXml(result: Result): string {
       `rounded=0;fillColor=${model.background};` +
         "strokeColor=none;",
     ),
-  );
 
-  // ----------------------------------------------------------
-  // Заголовки
-  // ----------------------------------------------------------
-
-  cells.push(
+    // Заголовки
     createText(
       "diagram-title",
       model.title,
@@ -766,9 +759,7 @@ function createDiagramXml(result: Result): string {
         bold: true,
       },
     ),
-  );
 
-  cells.push(
     createText(
       "diagram-subtitle",
       model.subtitle,
@@ -781,13 +772,8 @@ function createDiagramXml(result: Result): string {
       DIAGRAM_THEME.text.secondary,
       12,
     ),
-  );
 
-  // ----------------------------------------------------------
-  // Сетевые сегменты
-  // ----------------------------------------------------------
-
-  cells.push(
+    // Сетевые сегменты
     createNetwork(
       "network-open",
       "ОТКРЫТАЯ СЕТЬ",
@@ -795,9 +781,7 @@ function createDiagramXml(result: Result): string {
       model.openSegment,
       DIAGRAM_THEME.segment.open,
     ),
-  );
 
-  cells.push(
     createNetwork(
       "network-closed",
       "ЗАКРЫТЫЙ СЕГМЕНТ",
@@ -805,23 +789,14 @@ function createDiagramXml(result: Result): string {
       model.closedSegment,
       DIAGRAM_THEME.segment.closed,
     ),
-  );
+  ];
+}
 
-  // ----------------------------------------------------------
-  // Линии соединений
-  // ----------------------------------------------------------
-
-  cells.push(
-    ...createConnections(model),
-  );
-
-  // ----------------------------------------------------------
-  // Межсетевой экран
-  // ----------------------------------------------------------
-
-  cells.push(
+/** Межсетевой экран: корпус, кирпичная структура, пламя, подпись. */
+function createFirewallCells(model: DiagramModel): string[] {
+  const cells: string[] = [
     createFirewallBody(model.firewall.rect),
-  );
+  ];
 
   model.firewall.lines.forEach((line, index) => {
     cells.push(
@@ -840,55 +815,43 @@ function createDiagramXml(result: Result): string {
     createFirewallLabel(model),
   );
 
-  // ----------------------------------------------------------
-  // Устройства
-  // ----------------------------------------------------------
+  return cells;
+}
 
-  model.devices.forEach((device) => {
-    cells.push(
-      createDevice(
-        device.id,
-        device.name,
-        device.rect,
-      ),
-    );
-  });
-
-  // ----------------------------------------------------------
-  // Синоникс
-  // ----------------------------------------------------------
-
-  cells.push(
-    ...createSynonyx(model),
+/** Карточки устройств внутри сетей. */
+function createDeviceCells(model: DiagramModel): string[] {
+  return model.devices.map((device) =>
+    createDevice(
+      device.id,
+      device.name,
+      device.rect,
+    ),
   );
+}
 
-  // ----------------------------------------------------------
-  // USB
-  // ----------------------------------------------------------
-
-  cells.push(
-    ...createUsb(model),
-  );
-
-  // ----------------------------------------------------------
-  // Подписи линий
-  // ----------------------------------------------------------
-
-  cells.push(
+/** Подписи линий и нижняя легенда с пояснениями. */
+function createFooterCells(model: DiagramModel): string[] {
+  return [
     ...createConnectionLabels(model),
-  );
-
-  // ----------------------------------------------------------
-  // Нижняя легенда и пояснения
-  // ----------------------------------------------------------
-
-  cells.push(
     ...createLegend(model),
-  );
+  ];
+}
 
-  // ----------------------------------------------------------
-  // Сборка несжатого XML Draw.io
-  // ----------------------------------------------------------
+export function buildDrawioXml(result: Result): string {
+  // ВАЖНО:
+  // Используем ту же модель, что и DiagramPreview.tsx.
+  const model = buildDiagramModel(result);
+
+  // Порядок ячеек задаёт порядок отрисовки в draw.io
+  const cells: string[] = [
+    ...createHeaderCells(model),
+    ...createConnections(model),
+    ...createFirewallCells(model),
+    ...createDeviceCells(model),
+    ...createSynonyx(model),
+    ...createUsb(model),
+    ...createFooterCells(model),
+  ];
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <mxfile
@@ -924,12 +887,16 @@ function createDiagramXml(result: Result): string {
 }
 
 // ============================================================
-// ПУБЛИЧНАЯ ФУНКЦИЯ ЭКСПОРТА
+// ПУБЛИЧНЫЕ ФУНКЦИИ ЭКСПОРТА
 // ============================================================
 
-export function exportDrawio(result: Result): void {
-  const xml = createDiagramXml(result);
+export const DRAWIO_FILE_NAME = "synonyx-network.drawio";
 
+/** Скачивает готовый XML как файл .drawio. */
+export function downloadDrawioXml(
+  xml: string,
+  fileName: string = DRAWIO_FILE_NAME,
+): void {
   const blob = new Blob(
     [xml],
     {
@@ -942,7 +909,7 @@ export function exportDrawio(result: Result): void {
   const link = document.createElement("a");
 
   link.href = url;
-  link.download = "synonyx-network.drawio";
+  link.download = fileName;
 
   document.body.appendChild(link);
   link.click();

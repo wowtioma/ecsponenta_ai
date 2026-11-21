@@ -2,6 +2,11 @@
 import { create } from "zustand";
 import type { Message, Result } from "./types";
 import { askAi, resetSession } from "./api";
+import {
+  EMPTY_USAGE,
+  mergeUsage,
+  type SessionUsage,
+} from "./lib/usage";
 
 type State = {
   messages: Message[];
@@ -10,6 +15,9 @@ type State = {
   loading: boolean;
   lastText: string | null;
   timings: number[];
+
+  // Накопленный расход за сессию: токены и деньги
+  usage: SessionUsage;
 
   // Показывает, что сохранённый результат больше не является
   // актуальным ответом на последний запрос
@@ -73,6 +81,12 @@ export const useStore = create<State>((set, get) => {
           // Если новой конфигурации нет, старый результат
           // остаётся помеченным как предыдущий
           resultIsStale: !hasNewResult && state.result !== null,
+
+          // usage в ответе — накопительный итог сессии
+          usage: mergeUsage(
+            state.usage,
+            reply.result?.usage ?? null,
+          ),
         };
       });
     } catch (e) {
@@ -121,6 +135,7 @@ export const useStore = create<State>((set, get) => {
     loading: false,
     lastText: null,
     timings: [],
+    usage: EMPTY_USAGE,
     resultIsStale: false,
 
     // Отправка нового сообщения
@@ -167,6 +182,7 @@ export const useStore = create<State>((set, get) => {
         loading: false,
         lastText: null,
         timings: [],
+        usage: EMPTY_USAGE,
         resultIsStale: false,
       });
     },
