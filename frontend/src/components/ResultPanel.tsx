@@ -1,3 +1,4 @@
+// dsh-skip-func-length: Компонент панели результата — существующая структура; в этой правке добавлен только блок вкладки «Схема» (переключатель редактор/просмотр), полное разбиение панели — отдельная задача
 
 import { useState } from "react";
 import ReactMarkdown from "react-markdown";
@@ -5,11 +6,14 @@ import remarkGfm from "remark-gfm";
 import { useStore } from "../store";
 import RulesTable from "./RulesTable";
 import DiagramPreview from "./DiagramPreview";
+import DrawioEditor from "./DrawioEditor";
 import DiagramExport from "./DiagramExport";
 import { fileUsersLabel } from "../lib/format";
 import type { Result } from "../types";
 
 type Tab = "explanation" | "rules" | "diagram";
+
+type DiagramMode = "editor" | "preview";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "explanation", label: "Объяснение" },
@@ -68,6 +72,11 @@ export default function ResultPanel() {
   } = useStore();
 
   const [tab, setTab] = useState<Tab>("explanation");
+
+  // Схема по умолчанию открывается в редакторе draw.io;
+  // статичный просмотр остаётся запасным вариантом
+  const [diagramMode, setDiagramMode] =
+    useState<DiagramMode>("editor");
 
   // Пока первый запрос выполняется и результата ещё нет
   if (!result && loading) {
@@ -238,8 +247,43 @@ export default function ResultPanel() {
 
         {tab === "diagram" && (
           <div className="app-result__pane app-result__pane--diagram">
-            <DiagramExport result={result} />
-            <DiagramPreview result={result} />
+            <div className="diagram-viewbar">
+              <div
+                className="diagram-viewswitch"
+                role="group"
+                aria-label="Режим отображения схемы"
+              >
+                <button
+                  type="button"
+                  onClick={() => setDiagramMode("editor")}
+                  aria-pressed={diagramMode === "editor"}
+                  className={`diagram-viewswitch__btn${
+                    diagramMode === "editor" ? " is-active" : ""
+                  }`}
+                >
+                  Редактор
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setDiagramMode("preview")}
+                  aria-pressed={diagramMode === "preview"}
+                  className={`diagram-viewswitch__btn${
+                    diagramMode === "preview" ? " is-active" : ""
+                  }`}
+                >
+                  Просмотр
+                </button>
+              </div>
+
+              <DiagramExport result={result} />
+            </div>
+
+            {diagramMode === "editor" ? (
+              <DrawioEditor result={result} />
+            ) : (
+              <DiagramPreview result={result} />
+            )}
           </div>
         )}
       </div>

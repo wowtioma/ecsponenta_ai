@@ -10,6 +10,11 @@ import type { WheelEvent } from "react";
 import type { Result, Rule } from "../types";
 
 import {
+  buildDrawioXml,
+  downloadDrawioXml,
+} from "../lib/exportDrawio";
+
+import {
   buildDiagramModel,
   DIAGRAM_THEME,
   getDeviceName,
@@ -789,6 +794,16 @@ export default function DiagramPreview({
         </div>
 
         <div className="diagram-controls">
+          <button
+            type="button"
+            onClick={() =>
+              downloadDrawioXml(buildDrawioXml(result))
+            }
+            className="diagram-btn"
+          >
+            Скачать .drawio
+          </button>
+
           <button
             type="button"
             onClick={zoomOut}

@@ -1,13 +1,17 @@
 
 import type { Result } from "../types";
 
-import { exportDrawio } from "../lib/exportDrawio";
 import { exportJson } from "../lib/exportJson";
 
 interface DiagramExportProps {
   result: Result;
 }
 
+/**
+ * Экспорт результата расчёта в JSON.
+ * Скачивание .drawio живёт рядом со схемой: у статичного
+ * просмотра и у редактора draw.io — свои кнопки.
+ */
 export default function DiagramExport({
   result,
 }: DiagramExportProps) {
@@ -19,14 +23,6 @@ export default function DiagramExport({
         className="app-button app-button-outline app-button-sm"
       >
         JSON для эксперта
-      </button>
-
-      <button
-        type="button"
-        onClick={() => exportDrawio(result)}
-        className="app-button app-button-primary app-button-sm"
-      >
-        Скачать .drawio
       </button>
     </div>
   );
