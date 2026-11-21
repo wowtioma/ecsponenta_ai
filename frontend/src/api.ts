@@ -4,6 +4,9 @@ import { mockAnswer } from "./mocks";
 // Включается строкой VITE_USE_MOCK=true в файле .env.local (рядом с package.json)
 const USE_MOCK = import.meta.env.VITE_USE_MOCK === "true";
 
+// Демо-режим без бэкенда: так собирается статическая версия для GitHub Pages
+export const IS_DEMO_MODE = USE_MOCK;
+
 function getSessionId(): string {
   let id = localStorage.getItem("session_id");
   if (!id) {

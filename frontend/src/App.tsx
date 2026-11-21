@@ -1,8 +1,8 @@
 import type { CSSProperties } from "react";
+import AppHeader from "./components/AppHeader";
 import Chat from "./components/Chat";
 import PanelSplitter from "./components/PanelSplitter";
 import ResultPanel from "./components/ResultPanel";
-import ThemeToggle from "./components/ThemeToggle";
 import { useStore } from "./store";
 import { usePanelWidth } from "./usePanelWidth";
 
@@ -28,49 +28,7 @@ export default function App() {
 
   return (
     <div className="app-shell">
-      <header className="app-header">
-        <div className="app-header__brand">
-          <img
-            src="/logo_shield.png"
-            alt="Логотип Синоникс"
-            className="app-header__logo"
-          />
-
-          <div className="app-header__titles">
-            <span className="app-header__title">
-              <span className="app-header__title-full">
-                ИИ-ассистент по размещению «Синоникса»
-              </span>
-
-              <span className="app-header__title-short">
-                ИИ-ассистент «Синоникс»
-              </span>
-            </span>
-
-            <span className="app-header__subtitle">
-              Расчёт правил обмена между двумя сетями
-            </span>
-          </div>
-        </div>
-
-        <div className="app-header__right">
-          {last !== null && avg !== null && (
-            <span className="app-header__timings">
-              Шаг: {last.toFixed(1)} с · среднее: {avg.toFixed(1)} с
-            </span>
-          )}
-
-          <ThemeToggle />
-
-          <button
-            type="button"
-            onClick={reset}
-            className="app-button app-button-outline app-button-sm"
-          >
-            Новая сессия
-          </button>
-        </div>
-      </header>
+      <AppHeader last={last} avg={avg} onReset={reset} />
 
       <main
         className="app-main"
