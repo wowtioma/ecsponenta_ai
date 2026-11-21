@@ -39,7 +39,9 @@ def clarification(case, outcome):
 
 def rules_check(expected, result):
     keys = ("type", "from", "to", "mode", "protocol", "port", "checks")
-    key = lambda r: json.dumps([r.get(k) for k in keys], ensure_ascii=False, sort_keys=True)
+    def key(rule):
+        values = [sorted(rule[k]) if k == "checks" and isinstance(rule.get(k), list) else rule.get(k) for k in keys]
+        return json.dumps(values, ensure_ascii=False, sort_keys=True)
     actual_rules = result.get("rules", [])
     problems = []
     if result.get("rules_count") != expected["rules_count"]:
@@ -53,7 +55,10 @@ def rules_check(expected, result):
 report = {}
 output = Path("sessions") / "audit_results.json"
 output.parent.mkdir(exist_ok=True)
+selected = set(os.environ.get("SYNONYX_AUDIT_CASES", "").split(",")) - {""}
 for case in cases:
+    if selected and case["id"] not in selected:
+        continue
     label = case["id"]
     sid = f"audit-{label}-{uuid4().hex[:8]}"
     turns = []
@@ -61,7 +66,7 @@ for case in cases:
         first = post(sid, case["query"])
         turns.append(first)
         o = first
-        if label == "N05":
+        if label == "N05" and o.get("result"):
             o = post(sid, case["follow_up"]["user_answer"], o.get("result"))
             turns.append(o)
         for _ in range(3):
@@ -72,15 +77,23 @@ for case in cases:
             turns.append(o)
         r = o.get("result") or {}
         text = o.get("text", "")
-        if "не смогла извлечь" in text:
+        if "Groq достиг лимита" in text:
+            problems = ["Groq rate limit"]
+        elif "не смогла извлечь" in text:
             problems = ["Groq extraction did not return usable JSON"]
         elif label == "N01":
             problems = [] if first.get("questions") and r.get("status") == "preliminary" and "минимум 1" in text else ["clarification or minimum"]
         elif label == "O01":
             problems = [] if r.get("requests_for_vendor") and "icap" in text.casefold() else ["unsupported feature response"]
         elif label in ("Q01", "Q10"):
-            keywords = ("256",) if label == "Q01" else ("межсетев", "трафик", "синоникс")
-            problems = [] if o.get("sources") and all(k in text.casefold() for k in keywords) else ["fact or sources"]
+            answer = text.casefold()
+            if label == "Q01":
+                has_fact = "256" in answer
+            else:
+                has_fact = all(k in answer for k in ("tcp", "udp", "синоникс", "фильтр")) and (
+                    "межсетев" in answer or "мэ" in answer
+                )
+            problems = [] if o.get("sources") and has_fact else ["fact or sources"]
         elif label == "N05":
             problems = rules_check(case["follow_up"]["expected"], r)
             if (first.get("result") or {}).get("rules_count") != 1 or not first.get("questions"):

@@ -244,6 +244,7 @@ _MANUAL_ROLES = ("подрядчик", "инженер", "сотрудник", "
 _CHECK_TEXT_MARKERS = (
     ("маск", "маска имени"),
     ("имени файла", "маска имени"),
+    ("проверять имя файла", "маска имени"),
     ("размер", "размер"),
     ("целост", "целостность"),
     ("расширен", "тип и расширение"),
@@ -338,6 +339,7 @@ def _normalize_flows(data: dict, text: str = "") -> None:
 
     # --- проход 2: проверки, доступ, USB, дефолты ---
     text_checks = _checks_from_text(text)
+    one_file_flow = sum(f.get("type") == "file" for f in flows) == 1
     for f in flows:
         f["source_checks"] = _norm_checks(f.get("source_checks"))
         f["target_checks"] = _norm_checks(f.get("target_checks"))
@@ -356,6 +358,15 @@ def _normalize_flows(data: dict, text: str = "") -> None:
         ):
             f["source_checks"] = list(text_checks)
             f["target_checks"] = []
+
+        # A single file flow with checks explicitly required before transfer
+        # must retain every named check even if extraction found only some.
+        if f.get("type") == "file" and one_file_flow and "перед передачей" in text.casefold() and text_checks:
+            target_checks = f["target_checks"] or []
+            source_checks = f["source_checks"] or []
+            heard = [check for check in text_checks if check not in target_checks]
+            f["source_checks"] = list(dict.fromkeys(source_checks + heard))
+            f["target_checks"] = target_checks
 
         access = f.get("access_group")
         f["access_group"] = access.strip() if isinstance(access, str) and access.strip() else None
@@ -379,6 +390,14 @@ def _normalize_flows(data: dict, text: str = "") -> None:
         f.setdefault("recipient", None)
         f.setdefault("application_protocol", None)
         reverse = f.get("reverse_forbidden")
+        if f.get("type") == "file" and one_file_flow and f.get("from") and f.get("to"):
+            explicit_file_reverse_ban = re.search(
+                r"файлы\s+не\s+передаются|обратной\s+файловой\s+передачи\s+нет",
+                text, re.I,
+            )
+            if reverse is True or explicit_file_reverse_ban:
+                reverse = True
+                f["mode"] = "one-way"
         f["reverse_forbidden"] = reverse if isinstance(reverse, bool) else None
         f.setdefault("checks", [])
         f.setdefault("method_open", None)

@@ -13,6 +13,7 @@ load_dotenv(Path(__file__).with_name(".env"))
 from llm import Journal, KnowledgeBase, LLMClient, answer_fact, build_timing, build_usage, extract
 from llm import detect_unsupported, save_session
 from llm.answer import explain_placement, explain_rules
+from llm.extract import _norm_checks
 from llm import prompts
 
 prompts.SYSTEM_EXTRACT += """
@@ -25,11 +26,18 @@ access_group: shared при общем доступе или одном пере
 иначе null или явно указанная группа. На верхнем уровне manual_file_users:
 список явно упомянутых людей, которые передают файлы вручную или на USB.
 Для NTP с UDP укажи application_protocol: NTP.
+Фраза «на один сервер в офисе» уже описывает роль получателя. Заполни recipient
+как «сервер в офисе», даже если нет имени машины или IP-адреса.
 Укажи USB, если человек приносит файл на флешке, а не загружает его по сети.
 В этом случае from — идентификатор открытой сети, к которой обращён Узел А.
 Для PUSH при поступлении файла укажи trigger: arrival. При явно указанном
 внешнем антивирусе без стороны сохрани требование в checks, стороны оставь null.
 """
+
+prompts.SYSTEM_FACT += (
+    "\nИсточник интерфейс показывает отдельно из метаданных поиска. "
+    "В тексте ответа не указывай файл, номер раздела или строку «Источник»."
+)
 
 from b_adapter import session_from_extraction
 from rules import Session, apply_answer, evaluate, record_unresolved_answer
@@ -37,6 +45,8 @@ from rules import Session, apply_answer, evaluate, record_unresolved_answer
 journal = Journal()
 sessions = {}
 project_messages = {}
+shown_questions = {}
+turns = {}
 client = LLMClient(journal)
 if client.provider != "groq" or not client.api_key:
     raise SystemExit("Configure LLM_PROVIDER=groq and GROQ_API_KEY in the local .env.")
@@ -74,17 +84,28 @@ def apply_form(session, questions, message):
         elif key.endswith((".source_checks", ".target_checks")):
             if normalized == "без проверок":
                 value = []
-            elif "антивирус" in normalized and "внешн" in normalized:
-                value = ["ICAP: внешний антивирус"]
             else:
-                value = [answer.strip()]
+                value = _norm_checks([part.strip() for part in answer.split(",")])
             session = apply_answer(session, key, value)
+        elif key.endswith((".source_methods", ".target_methods")):
+            mode = {
+                "вручную по sftp": "manual", "заберёт человек вручную": "manual",
+                "usb": "USB", "на флешку": "USB", "pull": "PULL",
+                "автоматически в хранилище": "PUSH",
+            }.get(normalized)
+            if mode is None:
+                return None
+            session = apply_answer(session, key, [{"mode": mode}])
         elif key.endswith(".access_group") and (
             normalized == "да" or "разделение доступа не требует" in normalized
         ):
             session = apply_answer(session, key, "shared")
             if session.manual_file_users is None and "один подрядчик" in normalized:
                 session = session.model_copy(update={"manual_file_users": ["contractor"]})
+        elif key.endswith(".recipient") and normalized.rstrip(".!?") in (
+            "одна", "одна система", "один", "один получатель", "несколько", "несколько систем"
+        ):
+            continue
         elif key.endswith((".recipient", ".storage")):
             session = apply_answer(session, key, answer.strip())
         elif key.endswith(".protocol") and answer.strip().upper() in ("TCP", "UDP", "SMB", "FTP", "SFTP", "MQTT", "NTP"):
@@ -99,7 +120,8 @@ def apply_form(session, questions, message):
 def respond(request, kb):
     session_id = request["session_id"]
     message = request["message"]
-    turn_id = len(journal.calls(session_id)) + 1
+    turn_id = turns.get(session_id, 0) + 1
+    turns[session_id] = turn_id
     unsupported = detect_unsupported(message)
     if unsupported:
         result = evaluate(Session(session_id=session_id, requests_for_vendor=unsupported))["result"]
@@ -115,7 +137,7 @@ def respond(request, kb):
     session = None
     previous = sessions.get(session_id)
     if previous is not None:
-        pending = evaluate(previous)["questions"]
+        pending = shown_questions.get(session_id, [])
         if pending:
             session = apply_form(previous, pending, message)
             if session is None and message.startswith(pending[0]["text"]):
@@ -128,7 +150,10 @@ def respond(request, kb):
         full_message = (context + "\nУточнение заказчика: " + message) if context else message
         slots = extract(client, full_message, session_id=session_id, turn_id=turn_id)
         if slots.get("_fallback"):
-            return {"text": "Модель не смогла извлечь параметры. Повторите запрос.", "result": None}
+            text = "Модель не смогла извлечь параметры. Повторите запрос."
+            if "RateLimitError" in slots.get("_warning", ""):
+                text = "Groq достиг лимита запросов или токенов. Повторите через минуту."
+            return {"text": text, "result": None}
         for flow in slots.get("flows", []):
             port = flow.get("port")
             if isinstance(port, str):
@@ -151,15 +176,34 @@ def respond(request, kb):
             rule["checks_by_node"] = details["checks_by_node"]
             if any(m["mode"] == "USB" for methods in details["methods"].values() for m in methods):
                 rule["transport"] = "usb"
-    result["usage"] = build_usage(journal, session_id)
-    result["timing"] = build_timing(journal, session_id)
+    questions = [dict(question) for question in outcome["questions"]]
+    flows_by_id = {flow.id: flow for flow in session.flows}
+    for question in questions:
+        flow_id, _, field = question["id"].rpartition(".")
+        flow = flows_by_id.get(flow_id)
+        if field == "port" and flow and flow.recipient:
+            question["text"] = f"На какой порт системы «{flow.recipient}» поступает трафик по {flow.protocol}?"
+        elif field in ("source_methods", "target_methods") and flow:
+            description = flow.description or "Файловый обмен"
+            action = ("Как файлы попадут в «Синоникс»?" if field == "source_methods"
+                      else "Как файлы поступят к получателю?")
+            question["text"] = f"«{description}». {action}"
+    # The frontend adds its own “Не знаю” and “Другое” buttons.
     questions = [
         {**q, "options": [option for option in q["options"] if option not in ("Не знаю", "Другое")]}
-        for q in outcome["questions"]
+        for q in questions
     ]
+    # Batch answers from the current frontend include the displayed question text.
+    shown_questions[session_id] = questions
+    result["usage"] = build_usage(journal, session_id)
+    result["timing"] = build_timing(journal, session_id)
     text = f"Рассчитано правил: {result['rules_count']}."
     if outcome["minimum_rules_count"] > result["rules_count"]:
-        text += f" Предварительная оценка: минимум {outcome['minimum_rules_count']}."
+        minimum = outcome["minimum_rules_count"]
+        estimate = "Предварительная оценка: минимум 1 правило." if minimum == 1 else (
+            f"Предварительная оценка по числу правил: минимум {minimum}."
+        )
+        text = f"{text} {estimate}" if result["rules_count"] else estimate
     if questions:
         text += " Для завершения расчёта нужны уточнения."
     if outcome["issues"]:
