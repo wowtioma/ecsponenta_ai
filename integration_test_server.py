@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).with_name(".env"))
 
 from llm import Journal, KnowledgeBase, LLMClient, answer_fact, build_timing, build_usage, extract
+from llm import config as llm_config
 from llm import detect_unsupported, save_session
 from llm.answer import explain_placement, explain_rules
 from llm.client import GroqRateLimit
@@ -395,19 +396,40 @@ def main():
     if client.provider != "groq" or not client.api_key:
         raise SystemExit("Configure LLM_PROVIDER=groq and GROQ_API_KEY in the local .env.")
 
+    kb_problem = llm_config.knowledge_base_problem()
+    if kb_problem:
+        raise SystemExit(kb_problem)
+
     archive_setting = os.environ.get("SYNONYX_CASE_ZIP")
-    if not archive_setting:
-        raise SystemExit("Set SYNONYX_CASE_ZIP to the organizers' ZIP archive.")
-    archive = Path(archive_setting).expanduser()
-    if not archive.is_file():
+    base_setting = os.environ.get("SYNONYX_BASE_DIR")
+    local_base = Path(base_setting).expanduser() if base_setting else None
+    used_local_base = local_base is not None and local_base.is_dir()
+
+    if not archive_setting and not used_local_base:
+        raise SystemExit(
+            "Set SYNONYX_CASE_ZIP to the organizers' ZIP archive.\n"
+            "If the archive is missing, point SYNONYX_BASE_DIR at a directory\n"
+            "with the synonyx_base/*.md files instead — the server then reads\n"
+            "the knowledge base directly from disk."
+        )
+    archive = Path(archive_setting).expanduser() if archive_setting else None
+    if archive is not None and not archive.is_file():
         raise SystemExit("SYNONYX_CASE_ZIP must point to an existing ZIP file.")
     port = int(os.environ.get("SYNONYX_API_PORT", "8000"))
-    with TemporaryDirectory() as directory, ZipFile(archive) as source:
-        for member in source.namelist():
-            path = Path(member)
-            if path.parent.as_posix() == "synonyx_base" and path.suffix == ".md":
-                (Path(directory) / path.name).write_bytes(source.read(member))
-        kb = KnowledgeBase(directory)
+    # Внутри песочницы DSH каталоги с именем tmp* запрещены к записи,
+    # поэтому временный каталог можно переопределить через SYNONYX_TEMP_DIR.
+    temp_setting = os.environ.get("SYNONYX_TEMP_DIR")
+    temp_kwargs = {"dir": Path(temp_setting).expanduser()} if temp_setting else {}
+    with TemporaryDirectory(**temp_kwargs) as directory, ZipFile(archive) as source:
+        if used_local_base:
+            # Альтернативный вариант: база знаний читается прямо из каталога кейса.
+            print(f"Knowledge base: {local_base}", flush=True)
+        else:
+            for member in source.namelist():
+                path = Path(member)
+                if path.parent.as_posix() == "synonyx_base" and path.suffix == ".md":
+                    (Path(directory) / path.name).write_bytes(source.read(member))
+        kb = KnowledgeBase(local_base if used_local_base else directory)
         with ThreadingHTTPServer(("127.0.0.1", port), Handler) as server:
             print(f"Groq fact/project test API on http://127.0.0.1:{port}", flush=True)
             server.serve_forever()
