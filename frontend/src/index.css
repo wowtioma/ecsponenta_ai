@@ -1,1 +1,649 @@
+
 @import "tailwindcss";
+
+/* =========================================================
+   СИНОНИКС — DESIGN SYSTEM
+   ========================================================= */
+
+:root {
+  --color-accent: #FF730F;
+  --color-accent-hover: #E5640A;
+  --color-accent-soft: #FFF0E5;
+
+  --color-text: #263B4B;
+  --color-text-muted: #465968;
+  --color-text-secondary: #526575;
+  --color-text-faint: #71818E;
+
+  --color-teal: #279F91;
+  --color-teal-light: #E5F6F3;
+
+  --color-bg: #FFFFFF;
+  --color-bg-soft: #F4F7F9;
+  --color-bg-card: #FFFFFF;
+
+  --color-border: #E2E8ED;
+  --color-border-strong: #CBD6DE;
+
+  /* Статусы */
+  --status-success: #187A50;
+  --status-success-bg: #E8F5ED;
+  --status-success-border: #B8DFC7;
+
+  --status-progress: #B85A0B;
+  --status-progress-bg: #FFF0E1;
+  --status-progress-border: #F4C18F;
+
+  --status-warning: #946200;
+  --status-warning-bg: #FFF6D9;
+  --status-warning-border: #EBD58B;
+
+  --status-error: #B83232;
+  --status-error-bg: #FCEAEA;
+  --status-error-border: #EABABA;
+
+  --status-info: #28618A;
+  --status-info-bg: #EAF3FA;
+  --status-info-border: #BCD5E8;
+
+  --shadow-soft: 0 8px 30px rgba(52, 73, 90, 0.07);
+  --shadow-header: 0 5px 24px rgba(52, 73, 90, 0.08);
+  --shadow-card: 0 4px 20px rgba(52, 73, 90, 0.06);
+
+  --radius-sm: 10px;
+  --radius-md: 16px;
+  --radius-lg: 22px;
+  --radius-xl: 28px;
+
+  --font-main: "Formular", Arial, sans-serif;
+}
+
+/* =========================================================
+   ШРИФТ FORMULAR
+   ========================================================= */
+
+@font-face {
+  font-family: "Formular";
+  src: url("/fonts/Formular-Light.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 300;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Formular";
+  src: url("/fonts/Formular-Regular.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Formular";
+  src: url("/fonts/Formular-Medium.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Formular";
+  src: url("/fonts/Formular-Bold.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+}
+
+/* =========================================================
+   БАЗОВЫЕ СТИЛИ
+   ========================================================= */
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  min-width: 320px;
+  scroll-behavior: smooth;
+  background: var(--color-bg);
+}
+
+body {
+  min-width: 320px;
+  min-height: 100vh;
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-main);
+  font-weight: 400;
+  -webkit-font-smoothing: antialiased;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+  transition:
+    background-color 0.2s ease,
+    color 0.2s ease,
+    border-color 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+::selection {
+  color: #FFFFFF;
+  background: var(--color-accent);
+}
+
+#root {
+  min-height: 100vh;
+}
+
+/* =========================================================
+   ОСНОВНАЯ КОМПОНОВКА
+   ========================================================= */
+
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+
+.app-header {
+  position: sticky;
+  z-index: 50;
+  top: 0;
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 76px;
+  padding: 12px 30px;
+  border: 0;
+  border-radius: 0 0 24px 24px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: var(--shadow-header);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+
+.app-header__brand {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 13px;
+}
+
+.app-header__logo {
+  width: 42px;
+  height: 42px;
+  flex-shrink: 0;
+  object-fit: contain;
+}
+
+.app-header__title {
+  color: var(--color-text);
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.app-header__right {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 20px;
+}
+
+.app-header__timings {
+  color: var(--color-text-secondary);
+  font-size: 12px;
+}
+
+.app-main {
+  display: grid;
+  flex: 1;
+  min-height: 0;
+  grid-template-columns: minmax(320px, 0.85fr) minmax(480px, 1.35fr);
+}
+
+.app-chat-section {
+  min-width: 0;
+  min-height: 0;
+  border-right: 1px solid var(--color-border);
+  background: var(--color-bg);
+}
+
+.app-result-section {
+  min-width: 0;
+  min-height: 0;
+  background: var(--color-bg-soft);
+  color: var(--color-text);
+}
+
+/* =========================================================
+   ОСНОВНЫЕ КНОПКИ
+   ========================================================= */
+
+.app-button-primary {
+  border: 1px solid var(--color-accent);
+  border-radius: 14px;
+  background: var(--color-accent);
+  color: #FFFFFF !important;
+  font-weight: 700;
+}
+
+.app-button-primary:hover:not(:disabled) {
+  border-color: var(--color-accent-hover);
+  background: var(--color-accent-hover);
+  color: #FFFFFF !important;
+  box-shadow: 0 5px 16px rgba(255, 115, 15, 0.2);
+}
+
+.app-button-outline {
+  border: 1px solid var(--color-accent);
+  border-radius: 14px;
+  background: #FFFFFF;
+  color: #C6530A;
+  font-weight: 600;
+}
+
+.app-button-outline:hover:not(:disabled) {
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
+  color: #A94408;
+}
+
+/* =========================================================
+   ПЕРЕОФОРМЛЕНИЕ TAILWIND — ФОНЫ
+   ========================================================= */
+
+.bg-black {
+  background-color: #FFFFFF !important;
+}
+
+.bg-zinc-950,
+.bg-zinc-900 {
+  background-color: var(--color-bg-soft) !important;
+}
+
+.bg-zinc-800 {
+  background-color: #EDF2F5 !important;
+}
+
+.bg-zinc-700 {
+  background-color: #E5EBEF !important;
+}
+
+/* Голубые основные кнопки заменяем на оранжевые */
+.bg-blue-600,
+.bg-sky-600 {
+  background-color: var(--color-accent) !important;
+}
+
+/* Светлые активные элементы */
+.bg-sky-600\/30,
+.bg-blue-600\/30 {
+  background-color: var(--color-accent-soft) !important;
+}
+
+/* =========================================================
+   ПЕРЕОФОРМЛЕНИЕ TAILWIND — ТЕКСТ
+   ========================================================= */
+
+.text-white {
+  color: var(--color-text) !important;
+}
+
+.text-zinc-300 {
+  color: var(--color-text-muted) !important;
+}
+
+.text-zinc-400,
+.text-zinc-500 {
+  color: var(--color-text-secondary) !important;
+}
+
+.text-zinc-600 {
+  color: var(--color-text-muted) !important;
+}
+
+.text-sky-400,
+.text-blue-400 {
+  color: var(--color-accent) !important;
+}
+
+/* Белый текст на цветных кнопках */
+.bg-blue-600,
+.bg-sky-600,
+.bg-blue-600 .text-white,
+.bg-sky-600 .text-white {
+  color: #FFFFFF !important;
+}
+
+/* =========================================================
+   ГРАНИЦЫ
+   ========================================================= */
+
+.border-zinc-800,
+.border-zinc-700 {
+  border-color: var(--color-border) !important;
+}
+
+.border-zinc-600 {
+  border-color: var(--color-border-strong) !important;
+}
+
+.border-sky-500,
+.border-blue-500 {
+  border-color: var(--color-accent) !important;
+}
+
+/* =========================================================
+   HOVER
+   ========================================================= */
+
+.hover\:bg-zinc-900:hover,
+.hover\:bg-zinc-800:hover {
+  background-color: #EDF2F5 !important;
+}
+
+.hover\:bg-blue-500:hover,
+.hover\:bg-sky-500:hover {
+  background-color: var(--color-accent-hover) !important;
+}
+
+.hover\:text-white:hover {
+  color: #FFFFFF !important;
+}
+
+/* =========================================================
+   СТАТУСЫ РЕЗУЛЬТАТА
+   ========================================================= */
+
+/* Готово — зелёный */
+.app-result-section [class*="text-green"],
+.app-result-section [class*="text-emerald"] {
+  color: var(--status-success) !important;
+}
+
+.app-result-section [class*="bg-green"],
+.app-result-section [class*="bg-emerald"] {
+  background-color: var(--status-success-bg) !important;
+}
+
+.app-result-section [class*="border-green"],
+.app-result-section [class*="border-emerald"] {
+  border-color: var(--status-success-border) !important;
+}
+
+/* Обновляется — оранжевый */
+.app-result-section [class*="text-orange"],
+.app-result-section [class*="text-amber"] {
+  color: var(--status-progress) !important;
+}
+
+.app-result-section [class*="bg-orange"],
+.app-result-section [class*="bg-amber"] {
+  background-color: var(--status-progress-bg) !important;
+}
+
+.app-result-section [class*="border-orange"],
+.app-result-section [class*="border-amber"] {
+  border-color: var(--status-progress-border) !important;
+}
+
+/* Предупреждение — жёлтый */
+.app-result-section [class*="text-yellow"] {
+  color: var(--status-warning) !important;
+}
+
+.app-result-section [class*="bg-yellow"] {
+  background-color: var(--status-warning-bg) !important;
+}
+
+.app-result-section [class*="border-yellow"] {
+  border-color: var(--status-warning-border) !important;
+}
+
+/* Ошибка — красный */
+.app-result-section [class*="text-red"],
+.app-result-section [class*="text-rose"] {
+  color: var(--status-error) !important;
+}
+
+.app-result-section [class*="bg-red"],
+.app-result-section [class*="bg-rose"] {
+  background-color: var(--status-error-bg) !important;
+}
+
+.app-result-section [class*="border-red"],
+.app-result-section [class*="border-rose"] {
+  border-color: var(--status-error-border) !important;
+}
+
+/* Информация — синий */
+.app-result-section [class*="text-blue"],
+.app-result-section [class*="text-sky"] {
+  color: var(--status-info) !important;
+}
+
+.app-result-section [class*="bg-blue"],
+.app-result-section [class*="bg-sky"] {
+  background-color: var(--status-info-bg) !important;
+}
+
+.app-result-section [class*="border-blue"],
+.app-result-section [class*="border-sky"] {
+  border-color: var(--status-info-border) !important;
+}
+
+/* =========================================================
+   ВКЛАДКИ ПАНЕЛИ РЕЗУЛЬТАТОВ
+   ========================================================= */
+
+/* Обычные вкладки */
+.app-result-section button {
+  color: var(--color-text-muted);
+}
+
+/* Активная вкладка */
+.app-result-section button[class*="bg-blue"],
+.app-result-section button[class*="bg-sky"] {
+  background-color: var(--color-accent-soft) !important;
+  border-color: var(--color-accent) !important;
+  color: #B94D09 !important;
+}
+
+/* Активная вкладка при наведении */
+.app-result-section button[class*="bg-blue"]:hover,
+.app-result-section button[class*="bg-sky"]:hover {
+  background-color: #FFE5D2 !important;
+  color: #963C05 !important;
+}
+
+/* =========================================================
+   ТАБЛИЦЫ
+   ========================================================= */
+
+.app-result-section th {
+  color: var(--color-text) !important;
+  font-weight: 700;
+}
+
+.app-result-section td {
+  color: var(--color-text-muted) !important;
+}
+
+.app-result-section td strong,
+.app-result-section td b,
+.app-result-section strong,
+.app-result-section b {
+  color: var(--color-text) !important;
+}
+
+/* =========================================================
+   ПОЛЯ ВВОДА
+   ========================================================= */
+
+input,
+textarea,
+select {
+  color: var(--color-text);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--color-text-secondary);
+  opacity: 1;
+}
+
+input:focus,
+textarea:focus,
+select:focus {
+  outline: none;
+  border-color: var(--color-accent) !important;
+  box-shadow: 0 0 0 3px rgba(255, 115, 15, 0.1);
+}
+
+/* =========================================================
+   КАРТОЧКИ И ПАНЕЛИ
+   ========================================================= */
+
+.rounded-2xl {
+  border-radius: var(--radius-lg);
+}
+
+.rounded-xl {
+  border-radius: var(--radius-md);
+}
+
+.shadow-sm,
+.shadow-md {
+  box-shadow: var(--shadow-card);
+}
+
+/* =========================================================
+   АНИМАЦИИ
+   ========================================================= */
+
+@keyframes app-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.app-fade-in {
+  animation: app-fade-in 0.3s ease both;
+}
+
+/* =========================================================
+   АДАПТИВНОСТЬ
+   ========================================================= */
+
+@media (max-width: 1100px) {
+  .app-header {
+    padding-right: 20px;
+    padding-left: 20px;
+  }
+
+  .app-main {
+    grid-template-columns: minmax(290px, 0.85fr) minmax(420px, 1.15fr);
+  }
+
+  .app-header__timings {
+    display: none;
+  }
+}
+
+@media (max-width: 900px) {
+  .app-shell {
+    min-height: 100vh;
+    height: auto;
+  }
+
+  .app-main {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .app-chat-section {
+    min-height: 440px;
+    border-right: 0;
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  .app-result-section {
+    min-height: 500px;
+  }
+}
+
+@media (max-width: 600px) {
+  .app-header {
+    min-height: 66px;
+    padding: 10px 14px;
+    border-radius: 0 0 18px 18px;
+  }
+
+  .app-header__logo {
+    width: 34px;
+    height: 34px;
+  }
+
+  .app-header__brand {
+    gap: 9px;
+  }
+
+  .app-header__title {
+    max-width: 190px;
+    font-size: 13px;
+  }
+
+  .app-header__right {
+    gap: 8px;
+  }
+
+  .app-header__right button {
+    padding: 8px 10px;
+    font-size: 12px;
+  }
+
+  .app-chat-section {
+    min-height: 420px;
+  }
+
+  .app-result-section {
+    min-height: 450px;
+  }
+}
+
+@media (max-width: 380px) {
+  .app-header__title {
+    max-width: 145px;
+    font-size: 12px;
+  }
+
+  .app-header__logo {
+    width: 30px;
+    height: 30px;
+  }
+}
