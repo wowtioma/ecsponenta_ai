@@ -90,12 +90,15 @@ class LLMClient:
         call_id = uuid.uuid4().hex
         started = time.time()
 
+        extra_body = self._provider_body()
+        if self.provider == "groq" and purpose == "extract":
+            extra_body.update(response_format={"type": "json_object"}, reasoning_effort="low")
         resp = client.chat.completions.create(
             model=self.model,
             messages=messages,
             temperature=temperature,
             max_tokens=max_tokens,
-            extra_body=self._provider_body(),
+            extra_body=extra_body,
         )
 
         choice = resp.choices[0]
