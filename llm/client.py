@@ -91,8 +91,7 @@ class LLMClient:
         started = time.time()
 
         extra_body = self._provider_body()
-        # JSON-режим для задач, где ответ обязан быть машинно-читаемым.
-        if self.provider == "groq" and purpose in ("extract", "questions"):
+        if self.provider == "groq" and purpose == "extract":
             extra_body.update(response_format={"type": "json_object"}, reasoning_effort="low")
         resp = client.chat.completions.create(
             model=self.model,
