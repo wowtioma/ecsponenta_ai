@@ -8,6 +8,7 @@ import {
 import type { WheelEvent } from "react";
 
 import type { Result, Rule } from "../types";
+import { netName } from "../lib/format";
 
 import {
   buildDrawioXml,
@@ -621,11 +622,13 @@ function RuleFlow({
 
   const from = isUsb
     ? rule.from
-    : getDeviceName(result, rule.from_device_id);
+    : getDeviceName(result, rule.from_device_id) ??
+      netName(result, rule.from);
 
   const to = isUsb
     ? rule.to
-    : getDeviceName(result, rule.to_device_id);
+    : getDeviceName(result, rule.to_device_id) ??
+      netName(result, rule.to);
 
   const isTwoWay = rule.mode === "two-way";
 

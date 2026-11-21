@@ -237,15 +237,17 @@ export function getRuleColor(index: number): string {
 export function getDeviceName(
   result: Result,
   deviceId?: string | null,
-): string {
+): string | null {
   if (!deviceId) {
-    return "Устройство не указано";
+    // Бэкенд пока не заполняет devices, поэтому подпись
+    // подставляется из сети на стороне компонента
+    return null;
   }
 
   return (
     result.devices.find(
       (device) => device.id === deviceId,
-    )?.name ?? "Устройство не найдено"
+    )?.name ?? null
   );
 }
 
@@ -321,50 +323,23 @@ function getOppositeSide(side: DiagramSide): DiagramSide {
 }
 
 function getScenarioTitle(result: Result): string {
-  const networkNames = result.networks
-    .map((network) => network.name)
-    .join(" ")
-    .toLowerCase();
+  const openNetwork = result.networks.find(
+    (network) => network.trust === "open",
+  );
 
-  if (
-    networkNames.includes("водоканал") ||
-    networkNames.includes("насос")
-  ) {
-    return "НАСОСНАЯ СТАНЦИЯ: ОБМЕН С ОБЩЕЙ СЕТЬЮ";
-  }
+  const closedNetwork = result.networks.find(
+    (network) => network.trust === "closed",
+  );
 
-  if (
-    networkNames.includes("офис") ||
-    networkNames.includes("цех")
-  ) {
-    return "ЦЕХ И ОФИС: ТЕЛЕМЕТРИЯ, ВРЕМЯ, ОБНОВЛЕНИЯ";
+  if (openNetwork && closedNetwork) {
+    return `${openNetwork.name} ↔ ${closedNetwork.name}`.toUpperCase();
   }
 
   return "СХЕМА ВЗАИМОДЕЙСТВИЯ СЕТЕЙ";
 }
 
 function getScenarioSubtitle(result: Result): string {
-  const networkNames = result.networks
-    .map((network) => network.name)
-    .join(" ")
-    .toLowerCase();
-
-  let scenario = "Конфигурация сети";
-
-  if (
-    networkNames.includes("водоканал") ||
-    networkNames.includes("насос")
-  ) {
-    scenario = "Сценарий F02";
-  } else if (
-    networkNames.includes("офис") ||
-    networkNames.includes("цех")
-  ) {
-    scenario = "Сценарий F07";
-  }
-
-  let subtitle =
-    `${scenario} · правил Синоникса: ${result.rules.length}`;
+  let subtitle = `Правил Синоникса: ${result.rules.length}`;
 
   if (result.file_users_count != null) {
     subtitle +=
@@ -477,11 +452,40 @@ export function buildDiagramModel(
   const closedNetworkName =
     closedNetwork?.name ?? "Закрытый сегмент";
 
-  const openDevicesSource = result.devices.filter(
+  const isSyntheticDevices = result.devices.length === 0;
+
+  // Бэкенд не всегда присылает конкретные устройства. Чтобы схема
+  // не оставалась с пустыми зонами, рисуем по одному обобщённому
+  // узлу «Системы сети» на каждую сеть.
+  const fallbackDevices: Result["devices"] = [];
+
+  if (isSyntheticDevices) {
+    if (openNetwork) {
+      fallbackDevices.push({
+        id: `network-${openNetwork.id}`,
+        network_id: openNetwork.id,
+        name: "Системы сети",
+      });
+    }
+
+    if (closedNetwork) {
+      fallbackDevices.push({
+        id: `network-${closedNetwork.id}`,
+        network_id: closedNetwork.id,
+        name: "Системы сети",
+      });
+    }
+  }
+
+  const devicesSource = isSyntheticDevices
+    ? fallbackDevices
+    : result.devices;
+
+  const openDevicesSource = devicesSource.filter(
     (device) => device.network_id === openNetwork?.id,
   );
 
-  const closedDevicesSource = result.devices.filter(
+  const closedDevicesSource = devicesSource.filter(
     (device) => device.network_id === closedNetwork?.id,
   );
 
@@ -502,7 +506,9 @@ export function buildDiagramModel(
       id: `device-open-${index}-${safeId(device.id)}`,
       deviceId: device.id,
       name: device.name,
-      subtitle: "",
+      subtitle: isSyntheticDevices
+        ? (openNetwork?.name ?? "")
+        : "",
       side: "open" as const,
       rect: {
         x: LAYOUT.deviceOpenX,
@@ -516,7 +522,9 @@ export function buildDiagramModel(
       id: `device-closed-${index}-${safeId(device.id)}`,
       deviceId: device.id,
       name: device.name,
-      subtitle: "",
+      subtitle: isSyntheticDevices
+        ? (closedNetwork?.name ?? "")
+        : "",
       side: "closed" as const,
       rect: {
         x: LAYOUT.deviceClosedX,
@@ -533,6 +541,31 @@ export function buildDiagramModel(
       device,
     ]),
   );
+
+  // Для обобщённых узлов привязываем правило к сети
+  const deviceByNetworkId = new Map<string, DiagramDevice>();
+
+  if (isSyntheticDevices) {
+    if (openNetwork) {
+      const openDevice = devices.find(
+        (device) => device.side === "open",
+      );
+
+      if (openDevice) {
+        deviceByNetworkId.set(openNetwork.id, openDevice);
+      }
+    }
+
+    if (closedNetwork) {
+      const closedDevice = devices.find(
+        (device) => device.side === "closed",
+      );
+
+      if (closedDevice) {
+        deviceByNetworkId.set(closedNetwork.id, closedDevice);
+      }
+    }
+  }
 
   const maxDeviceBottom = Math.max(
     LAYOUT.segmentY + LAYOUT.segmentHeight,
@@ -708,6 +741,19 @@ export function buildDiagramModel(
     const color = getRuleColor(index);
     const ruleKey = `rule-${safeId(rule.id)}`;
 
+    // Обобщённые узлы у всех правил одни и те же — разводим линии
+    // по вертикали, чтобы они не накладывались друг на друга.
+    // Шаг подбираем так, чтобы линии оставались в пределах узла.
+    const rulesCount = result.rules.length;
+    const syntheticStep =
+      rulesCount > 1
+        ? Math.min(26, 48 / (rulesCount - 1))
+        : 0;
+
+    const syntheticOffset = isSyntheticDevices
+      ? (index - (rulesCount - 1) / 2) * syntheticStep
+      : 0;
+
     // USB подключается только к Узлу А.
     if (rule.transport === "usb") {
       const usbRect: DiagramRect = {
@@ -767,16 +813,24 @@ export function buildDiagramModel(
       return;
     }
 
-    const source = rule.from_device_id
-      ? deviceById.get(rule.from_device_id)
-      : undefined;
+    const source =
+      (rule.from_device_id
+        ? deviceById.get(rule.from_device_id)
+        : undefined) ??
+      (isSyntheticDevices
+        ? deviceByNetworkId.get(rule.from)
+        : undefined);
 
-    const target = rule.to_device_id
-      ? deviceById.get(rule.to_device_id)
-      : undefined;
+    const target =
+      (rule.to_device_id
+        ? deviceById.get(rule.to_device_id)
+        : undefined) ??
+      (isSyntheticDevices
+        ? deviceByNetworkId.get(rule.to)
+        : undefined);
 
-    // Без конкретных устройств маршрут нельзя построить достоверно.
-    // Само правило при этом остаётся в легенде и JSON.
+    // Без конкретных устройств и без обобщённых узлов
+    // маршрут построить нельзя. Правило остаётся в легенде и JSON.
     if (!source || !target) {
       return;
     }
@@ -785,10 +839,14 @@ export function buildDiagramModel(
     const targetSide = target.side;
 
     const sourceCenterY =
-      source.rect.y + source.rect.height / 2;
+      source.rect.y +
+      source.rect.height / 2 +
+      syntheticOffset;
 
     const targetCenterY =
-      target.rect.y + target.rect.height / 2;
+      target.rect.y +
+      target.rect.height / 2 +
+      syntheticOffset;
 
     // --------------------------------------------------------
     // Если оба устройства находятся в одной сети
@@ -850,10 +908,14 @@ export function buildDiagramModel(
     );
 
     const sourceNodeCenterY =
-      sourceNode.rect.y + sourceNode.rect.height / 2;
+      sourceNode.rect.y +
+      sourceNode.rect.height / 2 +
+      syntheticOffset;
 
     const targetNodeCenterY =
-      targetNode.rect.y + targetNode.rect.height / 2;
+      targetNode.rect.y +
+      targetNode.rect.height / 2 +
+      syntheticOffset;
 
     // --------------------------------------------------------
     // Первый участок: устройство-источник → узел Синоникса
