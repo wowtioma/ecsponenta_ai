@@ -63,6 +63,7 @@ export default function UsageFooter() {
               {formatUsd(cost.value)}
             </span>
 
+            {usage.status === "partial" && <span className="app-usage__tag">частичные данные</span>}
             {cost.kind === "estimated" && (
               <span className="app-usage__tag">оценка</span>
             )}

@@ -1,3 +1,4 @@
+import { usbEndpoint } from "../lib/format";
 
 import { useMemo, useState } from "react";
 import { useDiagramViewport } from "../useDiagramViewport";
@@ -607,15 +608,10 @@ function RuleFlow({
   result: Result;
   color: string;
 }) {
-  const isUsb = rule.transport === "usb";
+  const usbSide = usbEndpoint(rule);
 
-  const from = isUsb
-    ? rule.from
-    : getDeviceName(result, rule.from_device_id);
-
-  const to = isUsb
-    ? rule.to
-    : getDeviceName(result, rule.to_device_id);
+  const from = usbSide === "from" ? "USB-носитель на Узле А" : getDeviceName(result, rule.from_device_id);
+  const to = usbSide === "to" ? "USB-носитель на Узле А" : getDeviceName(result, rule.to_device_id);
 
   const isTwoWay = rule.mode === "two-way";
 
@@ -632,7 +628,7 @@ function RuleFlow({
           Правило №{rule.id}
           {" · "}
           {rule.type === "data" ? "Данные" : "Файлы"}
-          {isUsb ? " · USB" : ""}
+          {usbSide ? " · USB" : ""}
         </div>
 
         <span className="diagram-rule__mode">
@@ -934,9 +930,7 @@ export default function DiagramPreview({
         </div>
 
         <p className="diagram-footer__text">
-          Межсетевой экран обеспечивает фильтрацию трафика.
-          Синоникс размещается в закрытом сегменте за МЭ.
-          USB-носитель подключается к Узлу А в обход межсетевого экрана.
+          {model.footerNote.text}
         </p>
       </div>
     </div>

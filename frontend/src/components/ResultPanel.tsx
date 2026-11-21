@@ -64,6 +64,7 @@ function List({
 export default function ResultPanel() {
   const {
     result,
+    messages,
     explanation,
     loading,
     resultIsStale,
@@ -107,6 +108,16 @@ export default function ResultPanel() {
       </div>
     );
   }
+
+  const questionLabels = new Map(
+    messages.flatMap((message) => message.questions?.map((question) => [
+      question.id, question.text.replace(/^Поток [^.]+\. /, ""),
+    ] as const) ?? []),
+  );
+  const missingLabels = result.unknowns.flatMap((key) => {
+    const label = questionLabels.get(key);
+    return label ? [label] : [];
+  });
 
   const documentKey = tab === "diagram" ? diagramDocumentKey(result) : "";
 
@@ -176,13 +187,21 @@ export default function ResultPanel() {
         {/* Неизвестные сведения */}
         <List
           title="Недостающие сведения"
-          items={result.unknowns}
+          items={missingLabels}
         />
 
         {/* Принятые допущения видны независимо от выбранной вкладки */}
         <List
           title="Принятые допущения"
-          items={result.assumptions}
+          items={result.assumptions.map((item) => {
+            if (typeof item === "string") return item;
+            if (item.id === "same_file_checks") return "Профили проверок одинаковые";
+            if (item.id === "protected_network_id") {
+              const network = result.networks.find((network) => network.id === item.value);
+              return `Защищаемая сеть — ${network?.name ?? item.value}`;
+            }
+            return `${item.id} — ${item.value}`;
+          })}
         />
       </div>
 
@@ -245,7 +264,8 @@ export default function ResultPanel() {
           </div>
         )}
 
-        {tab === "diagram" && (
+        {tab === "diagram" && !result.synonyx && <p>Схема появится после выбора защищаемой сети и второй стороны обмена.</p>}
+        {tab === "diagram" && result.synonyx && (
           <div className="app-result__pane app-result__pane--diagram">
             <div className="diagram-viewbar">
               <div

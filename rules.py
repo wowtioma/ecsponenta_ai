@@ -48,6 +48,7 @@ class Flow(Model):
     source_checks: list[str] | None = None
     target_checks: list[str] | None = None
     access_group: str | None = None
+    separate_file_access: bool = False
 
 
 class Session(Model):
@@ -58,6 +59,7 @@ class Session(Model):
     unknown_answers: list[str] = Field(default_factory=list)
     requests_for_vendor: list[str] = Field(default_factory=list)
     manual_file_users: list[str] | None = None
+    manual_users_count: int | None = Field(default=None, ge=0)
     existing_firewall: str | None = None
     devices: list[dict] = Field(default_factory=list)
     sources: list[dict] = Field(default_factory=list)
@@ -89,6 +91,7 @@ QUESTIONS = {
     "target_network_id": ("В какую сеть идёт поток?", ()),
     "initiator_network_id": ("Какая сеть инициирует соединение?", ()),
     "recipient": ("Какая система принимает данные? Укажите её имя или назначение.", ()),
+    "source_device": ("Какая система на противоположной от инициатора стороне принимает соединение?", ()),
     "protocol": ("Какой протокол используется?", PROTOCOLS),
     "port": ("Какой порт принимает соединение?", ()),
     "source_methods": ("Как отправляются файлы?", ("Вручную по SFTP", "USB", "PULL")),
@@ -124,8 +127,8 @@ def file_method_issue(method, *, sending, from_open):
 
 
 def file_candidates(flow):
-    source_methods = flow.source_methods
-    target_methods = flow.target_methods
+    source_methods = list({tuple(m.model_dump().items()): m for m in flow.source_methods}.values())
+    target_methods = list({tuple(m.model_dump().items()): m for m in flow.target_methods}.values())
     # Automatic settings are bound to a single rule.
     pull = [m for m in source_methods if m.mode == "PULL"]
     push = [m for m in target_methods if m.mode == "PUSH"]
@@ -135,11 +138,18 @@ def file_candidates(flow):
         raise ValueError("Уточните, какие хранилища PULL связаны с какими хранилищами PUSH.")
     return [
         (
-            source_manual + pull[index:index + 1],
-            target_manual + push[index:index + 1],
+            source_manual + (pull if len(pull) == 1 else pull[index:index + 1]),
+            target_manual + (push if len(push) == 1 else push[index:index + 1]),
         )
         for index in range(max(1, len(pull), len(push)))
     ]
+
+
+def flow_may_use_manual_transfer(flow):
+    return flow.payload == "files" and (
+        not flow.source_methods or not flow.target_methods
+        or any(method.mode in ("manual", "USB") for method in flow.source_methods + flow.target_methods)
+    )
 
 
 def file_method_label(method):
@@ -161,6 +171,7 @@ def evaluate(session: Session) -> dict:
     rule_details = []
     data_groups = {}
     file_groups = defaultdict(list)
+    file_automation_by_network = defaultdict(set)
     network_options = tuple(network.name for network in session.networks)
 
     def ask(key, label, options=()):
@@ -168,8 +179,18 @@ def evaluate(session: Session) -> dict:
 
     def missing(flow, field):
         label, options = QUESTIONS[field]
-        if field.endswith("network_id"):
-            options = network_options
+        if field == "source_network_id":
+            options = tuple(n.name for n in session.networks if n.id != flow.target_network_id)
+        elif field == "target_network_id":
+            options = tuple(n.name for n in session.networks if n.id != flow.source_network_id)
+        elif field == "initiator_network_id":
+            options = tuple(n.name for n in session.networks if n.id in (
+                flow.source_network_id, flow.target_network_id
+            ))
+        elif synonyx and field == "source_methods" and flow.source_network_id != synonyx["node_a"]:
+            options = tuple(option for option in options if option != "USB")
+        elif synonyx and field == "target_methods" and flow.target_network_id != synonyx["node_a"]:
+            options = tuple(option for option in options if option != "На флешку")
         ask(f"{flow.id}.{field}", f"Поток {flow.id}. {label}", options)
 
     closed = [n.id for n in session.networks if n.kind == "closed"]
@@ -177,12 +198,21 @@ def evaluate(session: Session) -> dict:
     firewall = synonyx = None
     if len(session.networks) > 2:
         issues.append("Проект поддерживает одну пару сетей.")
-    elif len(session.networks) < 2:
+    elif len(session.networks) == 1:
+        known = session.networks[0]
+        options = {"closed": ("Открытая сеть",), "open": ("Закрытая сеть",)}.get(known.kind, ())
+        other_side = "Какая сеть находится на другой стороне обмена?"
+        if any(flow.target_network_id == known.id for flow in session.flows):
+            other_side = f"Из какой сети нужно передавать файлы или данные в «{known.name}»?"
+        elif any(flow.source_network_id == known.id for flow in session.flows):
+            other_side = f"В какую сеть нужно передавать файлы или данные из «{known.name}»?"
+        ask("networks", other_side, options)
+    elif not session.networks:
         ask("networks", "Какие две сети должны обмениваться информацией?")
     else:
         protected = closed[0] if len(closed) == 1 else session.assumptions.get("protected_network_id")
         ids = {n.id for n in session.networks}
-        if protected not in ids or len(closed) > 1:
+        if protected not in ids:
             ask("protected_network_id", "Какую сеть защищаем в этом проекте?", network_options)
         else:
             external = next(n.id for n in session.networks if n.id != protected)
@@ -197,6 +227,9 @@ def evaluate(session: Session) -> dict:
 
     for flow in session.flows:
         before = len(questions)
+        missing_endpoints = flow.source_network_id is None or flow.target_network_id is None
+        if len(session.networks) < 2 and missing_endpoints:
+            continue
         for field in ("source_network_id", "target_network_id", "payload"):
             if getattr(flow, field) is None:
                 missing(flow, field)
@@ -232,21 +265,28 @@ def evaluate(session: Session) -> dict:
                 if mode == "two_way" and flow.reverse_forbidden:
                     issues.append(f"Поток {flow.id}: двунаправленный режим конфликтует с запретом обратного обмена.")
                     continue
+                recipient = flow.recipient
+                recipient_field = "recipient"
                 if mode == "two_way":
                     if flow.initiator_network_id not in (source, target):
                         missing(flow, "initiator_network_id")
                     elif flow.initiator_network_id == target:
                         source, target = target, source
-                recipient = flow.recipient
-                if not recipient:
-                    missing(flow, "recipient")
+                        recipient = flow.source_device
+                        recipient_field = "source_device"
+                if not recipient or not recipient.strip():
+                    missing(flow, recipient_field)
             if len(questions) != before:
                 continue
             if flow.port is None and protocol != "NTP":
                 missing(flow, "port")
                 if f"{flow.id}.port" not in session.unknown_answers:
                     continue
-            key = (source, target, mode, protocol, flow.port if protocol != "NTP" else None, recipient)
+            port_key = (
+                None if protocol == "NTP" else flow.port if flow.port is not None else flow.id
+            )
+            recipient_key = recipient.strip().casefold() if recipient else None
+            key = (source, target, mode, protocol, port_key, recipient_key)
             if key in data_groups:
                 if protocol == "NTP" and flow.port is not None:
                     previous = data_groups[key]
@@ -266,16 +306,39 @@ def evaluate(session: Session) -> dict:
                                  "from_device_name": endpoint_names[source], "to_device_name": endpoint_names[target]})
             continue
 
-        for field in ("direction", "source_methods", "target_methods", "source_checks", "target_checks", "access_group"):
-            if getattr(flow, field) is None:
-                missing(flow, field)
-        if len(questions) != before:
+        if flow.direction == "two_way" and flow.reverse_forbidden:
+            issues.append(f"Поток {flow.id}: запрошены оба направления и одновременно запрещена обратная передача.")
             continue
+        if any(method.mode == "PULL" for method in flow.source_methods or []):
+            file_automation_by_network[source].add("PULL")
+        if any(method.mode == "PUSH" for method in flow.target_methods or []):
+            file_automation_by_network[target].add("PUSH")
+        for field in ("direction", "source_methods", "target_methods", "access_group"):
+            if not getattr(flow, field):
+                if field == "access_group" and flow.separate_file_access:
+                    ask(f"{flow.id}.access_groups",
+                        "Назовите группы, которые должны получать файлы отдельно. Перечислите через запятую.")
+                else:
+                    missing(flow, field)
+        missing_methods = len(questions) != before
+        missing_checks = [field for field in ("source_checks", "target_checks") if getattr(flow, field) is None]
+        same_checks = session.assumptions.get("same_file_checks") == "yes"
+        for field in missing_checks:
+            if same_checks:
+                network_id = source if field == "source_checks" else target
+                name = next((network.name for network in session.networks if network.id == network_id), network_id)
+                ask(f"file_checks:{network_id}", f"Какие общие проверки файлов нужны на стороне «{name}»?",
+                    QUESTIONS[field][1])
+            else:
+                missing(flow, field)
+        if missing_methods or (missing_checks and not same_checks):
+            continue
+        before = len(questions)
         if flow.direction == "two_way":
             ask(f"{flow.id}.file_directions", "Укажите способы и проверки отдельно для каждого направления файлового обмена.")
             continue
         if any("встроенн" in check.casefold() and "антивирус" in check.casefold()
-               for check in flow.source_checks + flow.target_checks):
+               for check in (flow.source_checks or []) + (flow.target_checks or [])):
             issues.append("Встроенного антивируса нет. Можно согласовать внешнюю проверку по ICAP.")
             continue
 
@@ -303,9 +366,9 @@ def evaluate(session: Session) -> dict:
         try:
             candidates = file_candidates(flow)
         except ValueError as error:
-            ask(f"{flow.id}.storage_mapping", str(error))
+            ask(f"{flow.id}.storage_mapping", str(error) + " Запишите каждую пару через →, а пары разделите точкой с запятой.")
             continue
-        checks = {source: tuple(sorted(set(flow.source_checks))), target: tuple(sorted(set(flow.target_checks)))}
+        checks = {source: tuple(sorted(set(flow.source_checks or []))), target: tuple(sorted(set(flow.target_checks or [])))}
         profile = tuple(sorted(checks.items()))
         for left, right in candidates:
             entry = (source, target, left, right, flow.access_group, flow)
@@ -331,8 +394,10 @@ def evaluate(session: Session) -> dict:
             return {m.mode for m in methods if m.mode in ("PULL", "PUSH")}
 
         def compatible(left, right):
-            a, b, send, receive, access, _ = left
-            c, d, reverse_send, reverse_receive, reverse_access, _ = right
+            a, b, send, receive, access, forward_flow = left
+            c, d, reverse_send, reverse_receive, reverse_access, reverse_flow = right
+            if forward_flow.reverse_forbidden or reverse_flow.reverse_forbidden:
+                return False
             if (a, b, access) != (d, c, reverse_access):
                 return False
             return not (
@@ -372,7 +437,7 @@ def evaluate(session: Session) -> dict:
             pull_rules += any(m.mode == "PULL" for m in send + receive)
             protocols = {network: "; ".join(dict.fromkeys(file_method_label(m) for m in methods))
                          for network, methods in ((source, send), (target, receive))}
-            checks = list(dict.fromkeys(flow.source_checks + flow.target_checks))
+            checks = list(dict.fromkeys((flow.source_checks or []) + (flow.target_checks or [])))
             rule = {"type": "file", "from": source, "to": target, "mode": mode.replace("_", "-"),
                     "protocol": protocols, "checks": checks,
                     "description": flow.description or "Общий профиль проверок и доступа."}
@@ -380,7 +445,10 @@ def evaluate(session: Session) -> dict:
             rule_details.append({"methods": {
                               source: [m.model_dump(exclude_none=True) for m in send],
                               target: [m.model_dump(exclude_none=True) for m in receive],
-                          }, "access_group": access, "checks_by_node": dict(profile),
+                          }, "access_group": access, "checks_by_node": {
+                              network: values for network, values in profile
+                              if (flow.source_checks if network == source else flow.target_checks) is not None
+                          },
                              "from_device_name": flow.source_device, "to_device_name": flow.recipient})
 
     if len(rules) > RULE_LIMIT:
@@ -388,6 +456,9 @@ def evaluate(session: Session) -> dict:
     for index, rule in enumerate(rules, 1):
         rule["id"] = index
 
+    manual_transfer_possible = any(flow_may_use_manual_transfer(flow) for flow in session.flows)
+    if synonyx and manual_transfer_possible and session.manual_file_users is None and session.manual_users_count is None:
+        ask("manual_users_count", "Сколько разных людей будут вручную передавать или получать файлы?")
     unanswered = [key for key in questions if key not in session.unknown_answers]
     unconfigured_files = any(
         flow.payload == "files" and flow.source_network_id and flow.target_network_id
@@ -395,20 +466,36 @@ def evaluate(session: Session) -> dict:
         for flow in session.flows
     )
     minimum = len(rules)
-    if unconfigured_files and not any(rule["type"] == "file" for rule in rules):
-        minimum += 1
+    minimum_reason = ""
+    pull_networks = sum("PULL" in modes for modes in file_automation_by_network.values())
+    if unconfigured_files:
+        common_node = next((key for key, modes in file_automation_by_network.items() if len(modes) > 1), None)
+        file_minimum = 2 if common_node or pull_networks > 1 else 1
+        counted_files = sum(rule["type"] == "file" for rule in rules)
+        minimum += max(0, file_minimum - counted_files)
+        if file_minimum > counted_files and common_node:
+            name = next(network.name for network in session.networks if network.id == common_node)
+            minimum_reason = (
+                f"На стороне «{name}» нужны и автоматический забор (PULL), и доставка (PUSH). "
+                "В одном правиле для этой стороны можно задать только одну автоматическую настройку."
+            )
+        elif file_minimum > counted_files and pull_networks > 1:
+            minimum_reason = "Забор файлов нужен с обеих сторон. На каждую сторону с PULL требуется отдельное правило."
     if issues:
         status = "unsupported"
     elif not synonyx:
-        status = "needs_clarification"
+        status = "preliminary" if "protected_network_id" in session.unknown_answers else "needs_clarification"
     elif questions:
         status = "preliminary" if rules or minimum and not unanswered else "needs_clarification"
     else:
         status = "completed"
 
     has_files = any(flow.payload == "files" for flow in session.flows)
-    manual_count = len(set(session.manual_file_users or []))
-    file_users_unknown = has_files and (session.manual_file_users is None or unconfigured_files)
+    known_people = {name.strip().casefold() for name in session.manual_file_users or [] if name.strip()}
+    manual_count = 0
+    if manual_transfer_possible:
+        manual_count = session.manual_users_count if session.manual_users_count is not None else len(known_people)
+    file_users_unknown = has_files and ("manual_users_count" in questions or unconfigured_files)
     result = {
         "schema_version": "1.1", "session_id": session.session_id, "status": status,
         "networks": [{"id": n.id, "name": n.name, "trust": n.kind} for n in session.networks],
@@ -427,7 +514,9 @@ def evaluate(session: Session) -> dict:
     if file_users_unknown:
         result["file_users_range"] = {"min": manual_count + pull_rules, "max": None}
     return {"result": result, "questions": [questions[key] for key in unanswered], "issues": issues,
+            "deferred_questions": [question for key, question in questions.items() if key not in unanswered],
             "minimum_rules_count": minimum,
+            "minimum_rules_reason": minimum_reason,
             "existing_firewall": session.existing_firewall,
             "rule_details": {rule["id"]: detail for rule, detail in zip(rules, rule_details)}}
 
@@ -445,6 +534,47 @@ def record_unresolved_answer(session: Session, question_id: str, other: str | No
     return session.model_copy(update={"unknown_answers": unknowns, "requests_for_vendor": requests})
 
 
+def _split_file_flow(data, flow, variants, suffix, answered_key):
+    flow_id = flow["id"]
+    ids = {item["id"] for item in data["flows"]}
+    deferred = [key for key in data["unknown_answers"]
+                if key.startswith(flow_id + ".") and key != answered_key]
+    for position, variant in enumerate(variants, 1):
+        if position == 1:
+            flow.update(variant)
+            continue
+        index = position
+        new_id = f"{flow_id}-{suffix}-{index}"
+        while new_id in ids:
+            index += 1
+            new_id = f"{flow_id}-{suffix}-{index}"
+        ids.add(new_id)
+        data["flows"].append({**flow, **variant, "id": new_id})
+        data["unknown_answers"].extend(new_id + key[len(flow_id):] for key in deferred)
+
+
+def _apply_storage_mapping(data, flow, pairs, question_id):
+    def by_storage(field, mode):
+        methods = [method for method in flow[field] if method["mode"] == mode]
+        named = {method["storage"].strip().casefold(): method for method in methods}
+        if len(named) != len(methods):
+            raise ValueError("В конфигурации есть одинаковые имена хранилищ. Уточните, какие настройки входят в каждый поток.")
+        return named
+
+    pull = by_storage("source_methods", "PULL")
+    push = by_storage("target_methods", "PUSH")
+    selected = list(dict.fromkeys((left.strip().casefold(), right.strip().casefold()) for left, right in pairs))
+    if {left for left, _ in selected} != set(pull) or {right for _, right in selected} != set(push):
+        raise ValueError("Назовите все указанные хранилища по одному или нескольким маршрутам, без новых имён.")
+    source_manual = [method for method in flow["source_methods"] if method["mode"] != "PULL"]
+    target_manual = [method for method in flow["target_methods"] if method["mode"] != "PUSH"]
+    variants = [
+        {"source_methods": [*source_manual, pull[left]], "target_methods": [*target_manual, push[right]]}
+        for left, right in selected
+    ]
+    _split_file_flow(data, flow, variants, "route", question_id)
+
+
 def apply_answer(session: Session, question_id: str, value) -> Session:
     """Apply a confirmed structured answer to a new, validated session snapshot."""
     if question_id not in evaluate(session)["result"]["unknowns"]:
@@ -454,16 +584,44 @@ def apply_answer(session: Session, question_id: str, value) -> Session:
         if value not in {network.id for network in session.networks}:
             raise ValueError("Выберите идентификатор одной из указанных сетей.")
         data["assumptions"][question_id] = value
-    elif question_id in ("networks", "flows"):
+    elif question_id == "manual_users_count":
         data[question_id] = value
+    elif question_id == "networks":
+        data["networks"] = value
+        if len(session.networks) == 1 and len(value) == 2:
+            known_id = session.networks[0].id
+            other_id = next(network["id"] for network in value if network["id"] != known_id)
+            for flow in data["flows"]:
+                if flow["source_network_id"] is None and flow["target_network_id"] == known_id:
+                    flow["source_network_id"] = other_id
+                elif flow["target_network_id"] is None and flow["source_network_id"] == known_id:
+                    flow["target_network_id"] = other_id
+    elif question_id == "flows":
+        data["flows"] = value
+    elif question_id.startswith("file_checks:"):
+        network_id = question_id.partition(":")[2]
+        for flow in data["flows"]:
+            if flow["payload"] != "files":
+                continue
+            for endpoint, field in (("source_network_id", "source_checks"), ("target_network_id", "target_checks")):
+                if flow[endpoint] == network_id and flow[field] is None:
+                    flow[field] = value
     else:
         flow = max((f for f in data["flows"] if question_id.startswith(f["id"] + ".")),
                    key=lambda f: len(f["id"]), default=None)
         if flow is None:
             raise ValueError("Для этого уточнения требуется обновить описание потока.")
         path = question_id[len(flow["id"]) + 1:].split(".")
-        if len(path) == 1 and path[0] in QUESTIONS:
+        if path == ["access_group"] and value is False:
+            flow["separate_file_access"] = True
+        elif path == ["access_groups"]:
+            _split_file_flow(data, flow, [{"access_group": group} for group in value], "group", question_id)
+        elif path == ["storage_mapping"]:
+            _apply_storage_mapping(data, flow, value, question_id)
+        elif len(path) == 1 and path[0] in QUESTIONS:
             flow[path[0]] = value
+            if path == ["direction"]:
+                flow["reverse_forbidden"] = value == "one_way"
         elif len(path) == 3 and path[0] in ("source_methods", "target_methods"):
             field, index, attr = path
             flow[field][int(index)][attr] = value

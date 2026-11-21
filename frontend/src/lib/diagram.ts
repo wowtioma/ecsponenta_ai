@@ -1,5 +1,6 @@
 
 import type { Result, Rule } from "../types";
+import { diagramFileMethodLabel, shortFileProtocols, usbEndpoint } from "./format";
 
 // ============================================================
 // ЕДИНЫЙ ДВИЖОК СХЕМЫ
@@ -196,6 +197,7 @@ const LAYOUT = {
   deviceClosedX: 1150,
   deviceWidth: 240,
   deviceHeight: 56,
+  devicePortGap: 24,
 
   deviceCenterY: 305,
 
@@ -261,12 +263,8 @@ export function getProtocolLabel(rule: Rule): string {
   }
 
   if (protocol && typeof protocol === "object") {
-    const values = [
-      protocol.open,
-      protocol.closed,
-    ].filter(
-      (value): value is string =>
-        typeof value === "string" && value.length > 0,
+    const values = Object.values(protocol).filter(
+      (value): value is string => typeof value === "string" && value.length > 0,
     );
 
     return [...new Set(values)].join(" / ") || "Не указан";
@@ -277,20 +275,25 @@ export function getProtocolLabel(rule: Rule): string {
     : "Не указан";
 }
 
-export function getShortProtocol(rule: Rule): string {
-  return getProtocolLabel(rule);
-}
+export function getRuleLabel(rule: Rule, networkId?: string): string {
+  const usbSide = usbEndpoint(rule);
+  if (usbSide && (!networkId || networkId === rule[usbSide])) {
+    return `${rule.id} · ${usbSide === "from" ? "файлы с флешки" : "файлы на флешку"}`;
+  }
 
-export function getRuleLabel(rule: Rule): string {
-  if (rule.transport === "usb") {
-    return `${rule.id} · файлы с флешки`;
+  if (rule.type === "file") {
+    if (rule.protocol && typeof rule.protocol === "object" && networkId) {
+      const label = rule.protocol[networkId];
+      if (typeof label === "string" && label) {
+        return `${rule.id} · ${diagramFileMethodLabel(rule, networkId, label)}`;
+      }
+    }
+    const protocol = typeof rule.protocol === "string" ? shortFileProtocols(rule.protocol) : "Файлы";
+    return `${rule.id} · ${protocol}`;
   }
 
   const protocol = getProtocolLabel(rule);
-  const port = rule.port != null
-    ? ` ${rule.port}`
-    : "";
-
+  const port = rule.port != null ? ` ${rule.port}` : "";
   return `${rule.id} · ${protocol}${port}`;
 }
 
@@ -320,63 +323,25 @@ function getOppositeSide(side: DiagramSide): DiagramSide {
   return side === "open" ? "closed" : "open";
 }
 
-function getScenarioTitle(result: Result): string {
-  const networkNames = result.networks
-    .map((network) => network.name)
-    .join(" ")
-    .toLowerCase();
-
-  if (
-    networkNames.includes("водоканал") ||
-    networkNames.includes("насос")
-  ) {
-    return "НАСОСНАЯ СТАНЦИЯ: ОБМЕН С ОБЩЕЙ СЕТЬЮ";
+function getDiagramTitle(result: Result): string {
+  if (result.rules.length && result.rules.every((rule) => rule.type === "file")) {
+    return "СХЕМА ПЕРЕДАЧИ ФАЙЛОВ";
   }
-
-  if (
-    networkNames.includes("офис") ||
-    networkNames.includes("цех")
-  ) {
-    return "ЦЕХ И ОФИС: ТЕЛЕМЕТРИЯ, ВРЕМЯ, ОБНОВЛЕНИЯ";
-  }
-
   return "СХЕМА ВЗАИМОДЕЙСТВИЯ СЕТЕЙ";
 }
 
-function getScenarioSubtitle(result: Result): string {
-  const networkNames = result.networks
-    .map((network) => network.name)
-    .join(" ")
-    .toLowerCase();
-
-  let scenario = "Конфигурация сети";
-
-  if (
-    networkNames.includes("водоканал") ||
-    networkNames.includes("насос")
-  ) {
-    scenario = "Сценарий F02";
-  } else if (
-    networkNames.includes("офис") ||
-    networkNames.includes("цех")
-  ) {
-    scenario = "Сценарий F07";
+function getDiagramSubtitle(result: Result): string {
+  let subtitle = `Правил Синоникса: ${result.rules_count}`;
+  if (result.rules.some((rule) => rule.type === "file") && result.file_users_count != null) {
+    subtitle += ` · пользователей передачи файлов: ${result.file_users_count}`;
   }
-
-  let subtitle =
-    `${scenario} · правил Синоникса: ${result.rules.length}`;
-
-  if (result.file_users_count != null) {
-    subtitle +=
-      ` · пользователей передачи файлов: ${result.file_users_count}`;
-  }
-
   return subtitle;
 }
 
 // Распределяем устройства по вертикали.
 // Для двух и трёх устройств координаты совпадают с образцами F02/F07.
-function getDevicePositions(count: number): number[] {
+function getDevicePositions(heights: number[]): number[] {
+  const count = heights.length;
   if (count <= 0) return [];
 
   const gap =
@@ -391,17 +356,17 @@ function getDevicePositions(count: number): number[] {
               Math.min(87, 260 / (count - 1)),
             );
 
-  const firstCenter =
-    LAYOUT.deviceCenterY -
-    ((count - 1) * gap) / 2;
+  const centers = [0];
+  for (let index = 1; index < count; index += 1) {
+    const spacing = Math.max(gap, (heights[index - 1] + heights[index]) / 2 + 16);
+    centers.push(centers[index - 1] + spacing);
+  }
 
-  return Array.from(
-    { length: count },
-    (_, index) =>
-      firstCenter +
-      index * gap -
-      LAYOUT.deviceHeight / 2,
+  const firstCenter = Math.max(
+    LAYOUT.deviceCenterY - centers[count - 1] / 2,
+    LAYOUT.segmentY + 65 + heights[0] / 2,
   );
+  return centers.map((center, index) => firstCenter + center - heights[index] / 2);
 }
 
 function makeLabelRect(
@@ -432,8 +397,9 @@ function makeConnection(
   side: DiagramSide,
   labelY: number,
   color: string,
+  networkId: string,
 ): DiagramConnection {
-  const label = getRuleLabel(rule);
+  const label = getRuleLabel(rule, networkId);
 
   return {
     id,
@@ -463,13 +429,13 @@ function getNodeForSide(
 export function buildDiagramModel(
   result: Result,
 ): DiagramModel {
-  const openNetwork = result.networks.find(
-    (network) => network.trust === "open",
-  );
+  const openNetwork =
+    result.networks.find((network) => network.id === result.synonyx?.node_a_faces)
+    ?? result.networks.find((network) => network.trust === "open");
 
-  const closedNetwork = result.networks.find(
-    (network) => network.trust === "closed",
-  );
+  const closedNetwork =
+    result.networks.find((network) => network.id === result.synonyx?.node_b_faces)
+    ?? result.networks.find((network) => network.trust === "closed");
 
   const openNetworkName =
     openNetwork?.name ?? "Открытая сеть";
@@ -492,8 +458,8 @@ export function buildDiagramModel(
   // A calculated route can cross two known networks even when an endpoint
   // is unnamed. Label that endpoint as unknown in the drawing only.
   for (const rule of result.rules) {
-    if (rule.transport === "usb") continue;
     for (const side of ["from", "to"] as const) {
+      if (usbEndpoint(rule) === side) continue;
       const networkId = rule[side];
       if (
         !networkId ||
@@ -514,6 +480,33 @@ export function buildDiagramModel(
     }
   }
 
+  // Each incident rule gets a separate anchor, even if two rules use the same
+  // device or both refer to an unnamed device on this side of the diagram.
+  const endpointPorts = new Map<string, Map<string, number>>();
+  for (const side of ["from", "to"] as const) {
+    for (const rule of result.rules) {
+      if (usbEndpoint(rule) === side) continue;
+      const deviceId = resolveEndpoint(rule, side);
+      if (deviceId === undefined) continue;
+      const ports = endpointPorts.get(deviceId) ?? new Map<string, number>();
+      ports.set(`${rule.id}-${side}`, ports.size);
+      endpointPorts.set(deviceId, ports);
+    }
+  }
+
+  const getPortOffsets = (device: DiagramDevice, rule: Rule, side: "from" | "to") => {
+    const ports = endpointPorts.get(device.deviceId);
+    if (!ports || ports.size < 2) return { deviceY: 0, nodeY: 0, bendX: 0 };
+
+    const span = ports.size - 1;
+    const centeredIndex = (ports.get(`${rule.id}-${side}`) ?? 0) - span / 2;
+    return {
+      deviceY: centeredIndex * LAYOUT.devicePortGap,
+      nodeY: centeredIndex * Math.min(LAYOUT.devicePortGap, 56 / span),
+      bendX: centeredIndex * Math.min(14, 20 / span),
+    };
+  };
+
   const openDevicesSource = schemaDevices.filter((device) => device.network_id === openNetwork?.id);
   const closedDevicesSource = schemaDevices.filter((device) => device.network_id === closedNetwork?.id);
 
@@ -521,43 +514,23 @@ export function buildDiagramModel(
   // 1. Устройства и их координаты
   // ----------------------------------------------------------
 
-  const openPositions = getDevicePositions(
-    openDevicesSource.length,
-  );
-
-  const closedPositions = getDevicePositions(
-    closedDevicesSource.length,
-  );
-
-  const devices: DiagramDevice[] = [
-    ...openDevicesSource.map((device, index) => ({
-      id: `device-open-${index}-${safeId(device.id)}`,
+  const placeDevices = (entries: typeof schemaDevices, side: DiagramSide): DiagramDevice[] => {
+    const x = side === "open" ? LAYOUT.deviceOpenX : LAYOUT.deviceClosedX;
+    const heights = entries.map((device) => Math.max(
+      LAYOUT.deviceHeight,
+      (endpointPorts.get(device.id)?.size ?? 0) * LAYOUT.devicePortGap,
+    ));
+    const positions = getDevicePositions(heights);
+    return entries.map((device, index) => ({
+      id: `device-${side}-${index}-${safeId(device.id)}`,
       deviceId: device.id,
       name: device.name,
       subtitle: "",
-      side: "open" as const,
-      rect: {
-        x: LAYOUT.deviceOpenX,
-        y: openPositions[index],
-        width: LAYOUT.deviceWidth,
-        height: LAYOUT.deviceHeight,
-      },
-    })),
-
-    ...closedDevicesSource.map((device, index) => ({
-      id: `device-closed-${index}-${safeId(device.id)}`,
-      deviceId: device.id,
-      name: device.name,
-      subtitle: "",
-      side: "closed" as const,
-      rect: {
-        x: LAYOUT.deviceClosedX,
-        y: closedPositions[index],
-        width: LAYOUT.deviceWidth,
-        height: LAYOUT.deviceHeight,
-      },
-    })),
-  ];
+      side,
+      rect: { x, y: positions[index], width: LAYOUT.deviceWidth, height: heights[index] },
+    }));
+  };
+  const devices = [...placeDevices(openDevicesSource, "open"), ...placeDevices(closedDevicesSource, "closed")];
 
   const deviceById = new Map(
     devices.map((device) => [
@@ -741,7 +714,8 @@ export function buildDiagramModel(
     const ruleKey = `rule-${safeId(rule.id)}`;
 
     // USB подключается только к Узлу А.
-    if (rule.transport === "usb") {
+    const usbSide = usbEndpoint(rule);
+    if (usbSide) {
       const usbRect: DiagramRect = {
         x: LAYOUT.usbX,
         y: LAYOUT.usbY + usb.length * 42,
@@ -775,18 +749,20 @@ export function buildDiagramModel(
       const targetX = node.rect.x + node.rect.width / 2;
       const targetY = node.rect.y + node.rect.height;
 
+      const points = [
+        { x: sourceX, y: sourceY },
+        { x: sourceX, y: targetY + 10 },
+        { x: targetX, y: targetY },
+      ];
+      const input = usbSide === "from";
       connections.push({
         id: `${ruleKey}-usb`,
         ruleId: rule.id,
-        sourceId: `usb-${rule.id}`,
-        targetId: node.id,
-        points: [
-          { x: sourceX, y: sourceY },
-          { x: sourceX, y: targetY + 10 },
-          { x: targetX, y: targetY },
-        ],
+        sourceId: input ? `usb-${rule.id}` : node.id,
+        targetId: input ? node.id : `usb-${rule.id}`,
+        points: input ? points : points.reverse(),
         color,
-        mode: "one-way",
+        mode: rule.mode,
         label: "",
         labelRect: {
           x: 0,
@@ -796,166 +772,162 @@ export function buildDiagramModel(
         },
       });
 
-      return;
     }
 
-    const source = deviceById.get(resolveEndpoint(rule, "from") ?? "");
-    const target = deviceById.get(resolveEndpoint(rule, "to") ?? "");
-    if (!source || !target) return;
+    const target = usbSide === "to" ? undefined : deviceById.get(resolveEndpoint(rule, "to") ?? "");
+    if (!target && usbSide !== "to") return;
 
-    const sourceSide = source.side;
-    const targetSide = target.side;
+    if (usbSide !== "from") {
+      const source = deviceById.get(resolveEndpoint(rule, "from") ?? "");
+      if (!source) return;
+      const sourceSide = source.side;
+      const sourcePort = getPortOffsets(source, rule, "from");
+      const sourceCenterY = source.rect.y + source.rect.height / 2 + sourcePort.deviceY;
+      // --------------------------------------------------------
+      // Если оба устройства находятся в одной сети
+      // --------------------------------------------------------
 
-    const sourceCenterY =
-      source.rect.y + source.rect.height / 2;
+      if (target && sourceSide === target.side) {
+        const targetCenterY = target.rect.y + target.rect.height / 2 + getPortOffsets(target, rule, "to").deviceY;
+        const laneX =
+          sourceSide === "open" ? 340 : 1410;
 
-    const targetCenterY =
-      target.rect.y + target.rect.height / 2;
+        const sourceX =
+          sourceSide === "open"
+            ? source.rect.x + source.rect.width
+            : source.rect.x;
 
-    // --------------------------------------------------------
-    // Если оба устройства находятся в одной сети
-    // --------------------------------------------------------
+        const targetX =
+          target.side === "open"
+            ? target.rect.x + target.rect.width
+            : target.rect.x;
 
-    if (sourceSide === targetSide) {
-      const laneX =
-        sourceSide === "open" ? 340 : 1410;
+        const side = sourceSide;
 
-      const sourceX =
-        sourceSide === "open"
-          ? source.rect.x + source.rect.width
-          : source.rect.x;
+        connections.push(
+          makeConnection(
+            `${ruleKey}-direct`,
+            rule,
+            source.id,
+            target.id,
+            [
+              { x: sourceX, y: sourceCenterY },
+              { x: laneX, y: sourceCenterY },
+              { x: laneX, y: targetCenterY },
+              { x: targetX, y: targetCenterY },
+            ],
+            side,
+            sourceCenterY,
+            color,
+            rule.from,
+          ),
+        );
 
-      const targetX =
-        targetSide === "open"
-          ? target.rect.x + target.rect.width
-          : target.rect.x;
+        return;
+      }
 
-      const side = sourceSide;
+      // --------------------------------------------------------
+      // Для разных сетей выбираем соответствующие узлы.
+      // Открытая сеть соединяется с узлом, обращённым к ней.
+      // Закрытая сеть соединяется с узлом, обращённым к ней.
+      // --------------------------------------------------------
+
+      const sourceNode = getNodeForSide(
+        sourceSide,
+        nodeA,
+        nodeB,
+      );
+
+      const sourceNodeCenterY =
+        sourceNode.rect.y + sourceNode.rect.height / 2 + sourcePort.nodeY;
+
+      // --------------------------------------------------------
+      // Первый участок: устройство-источник → узел Синоникса
+      // --------------------------------------------------------
+
+      let firstPoints: DiagramPoint[];
+      let sourceAnchorX: number;
+      let nodeAnchorX: number;
+      let firstLaneX: number;
+
+      if (sourceSide === "open") {
+        sourceAnchorX =
+          source.rect.x + source.rect.width;
+
+        nodeAnchorX = sourceNode.rect.x;
+        firstLaneX = 540 + sourcePort.bendX;
+
+        firstPoints = [
+          {
+            x: sourceAnchorX,
+            y: sourceCenterY,
+          },
+          {
+            x: firstLaneX,
+            y: sourceCenterY,
+          },
+          {
+            x: firstLaneX,
+            y: sourceNodeCenterY,
+          },
+          {
+            x: nodeAnchorX,
+            y: sourceNodeCenterY,
+          },
+        ];
+      } else {
+        sourceAnchorX = source.rect.x;
+
+        nodeAnchorX =
+          sourceNode.rect.x + sourceNode.rect.width;
+
+        firstLaneX = 918 + sourcePort.bendX;
+
+        firstPoints = [
+          {
+            x: sourceAnchorX,
+            y: sourceCenterY,
+          },
+          {
+            x: firstLaneX,
+            y: sourceCenterY,
+          },
+          {
+            x: firstLaneX,
+            y: sourceNodeCenterY,
+          },
+          {
+            x: nodeAnchorX,
+            y: sourceNodeCenterY,
+          },
+        ];
+      }
 
       connections.push(
         makeConnection(
-          `${ruleKey}-direct`,
+          `${ruleKey}-source`,
           rule,
           source.id,
-          target.id,
-          [
-            { x: sourceX, y: sourceCenterY },
-            { x: laneX, y: sourceCenterY },
-            { x: laneX, y: targetCenterY },
-            { x: targetX, y: targetCenterY },
-          ],
-          side,
+          sourceNode.id,
+          firstPoints,
+          sourceSide,
           sourceCenterY,
           color,
+          rule.from,
         ),
       );
-
-      return;
     }
-
-    // --------------------------------------------------------
-    // Для разных сетей выбираем соответствующие узлы.
-    // Открытая сеть соединяется с узлом, обращённым к ней.
-    // Закрытая сеть соединяется с узлом, обращённым к ней.
-    // --------------------------------------------------------
-
-    const sourceNode = getNodeForSide(
-      sourceSide,
-      nodeA,
-      nodeB,
-    );
-
-    const targetNode = getNodeForSide(
-      targetSide,
-      nodeA,
-      nodeB,
-    );
-
-    const sourceNodeCenterY =
-      sourceNode.rect.y + sourceNode.rect.height / 2;
-
-    const targetNodeCenterY =
-      targetNode.rect.y + targetNode.rect.height / 2;
-
-    // --------------------------------------------------------
-    // Первый участок: устройство-источник → узел Синоникса
-    // --------------------------------------------------------
-
-    let firstPoints: DiagramPoint[];
-    let sourceAnchorX: number;
-    let nodeAnchorX: number;
-    let firstLaneX: number;
-
-    if (sourceSide === "open") {
-      sourceAnchorX =
-        source.rect.x + source.rect.width;
-
-      nodeAnchorX = sourceNode.rect.x;
-      firstLaneX = 540;
-
-      firstPoints = [
-        {
-          x: sourceAnchorX,
-          y: sourceCenterY,
-        },
-        {
-          x: firstLaneX,
-          y: sourceCenterY,
-        },
-        {
-          x: firstLaneX,
-          y: sourceNodeCenterY,
-        },
-        {
-          x: nodeAnchorX,
-          y: sourceNodeCenterY,
-        },
-      ];
-    } else {
-      sourceAnchorX = source.rect.x;
-
-      nodeAnchorX =
-        sourceNode.rect.x + sourceNode.rect.width;
-
-      firstLaneX = 918;
-
-      firstPoints = [
-        {
-          x: sourceAnchorX,
-          y: sourceCenterY,
-        },
-        {
-          x: firstLaneX,
-          y: sourceCenterY,
-        },
-        {
-          x: firstLaneX,
-          y: sourceNodeCenterY,
-        },
-        {
-          x: nodeAnchorX,
-          y: sourceNodeCenterY,
-        },
-      ];
-    }
-
-    connections.push(
-      makeConnection(
-        `${ruleKey}-source`,
-        rule,
-        source.id,
-        sourceNode.id,
-        firstPoints,
-        sourceSide,
-        sourceCenterY,
-        color,
-      ),
-    );
 
     // --------------------------------------------------------
     // Второй участок: узел Синоникса → устройство-получатель
     // --------------------------------------------------------
 
+    if (!target) return;
+    const targetSide = target.side;
+    const targetNode = getNodeForSide(targetSide, nodeA, nodeB);
+    const targetPort = getPortOffsets(target, rule, "to");
+    const targetCenterY = target.rect.y + target.rect.height / 2 + targetPort.deviceY;
+    const targetNodeCenterY = targetNode.rect.y + targetNode.rect.height / 2 + targetPort.nodeY;
     let secondPoints: DiagramPoint[];
     let targetAnchorX: number;
     let nodeTargetX: number;
@@ -966,7 +938,7 @@ export function buildDiagramModel(
       targetAnchorX =
         target.rect.x + target.rect.width;
 
-      secondLaneX = 540;
+      secondLaneX = 540 + targetPort.bendX;
 
       secondPoints = [
         {
@@ -991,7 +963,7 @@ export function buildDiagramModel(
         targetNode.rect.x + targetNode.rect.width;
 
       targetAnchorX = target.rect.x;
-      secondLaneX = 900;
+      secondLaneX = 900 + targetPort.bendX;
 
       secondPoints = [
         {
@@ -1023,6 +995,7 @@ export function buildDiagramModel(
         targetSide,
         targetCenterY,
         color,
+        rule.to,
       ),
     );
   });
@@ -1072,8 +1045,8 @@ export function buildDiagramModel(
   const footerNote =
     "МЭ расположен на границе закрытого сегмента. " +
     "Синоникс размещён внутри закрытого сегмента сразу за МЭ. " +
-    "Узел А обращён к открытой сети, Узел В — к закрытому сегменту. " +
-    "USB подключается к Узлу А в обход МЭ.";
+    "Узел А обращён к открытой сети, Узел В — к закрытому сегменту." +
+    (usb.length ? " USB подключается к Узлу А в обход МЭ." : "");
 
   const height = Math.max(
     LAYOUT.height,
@@ -1089,8 +1062,8 @@ export function buildDiagramModel(
     height,
     background: DIAGRAM_THEME.background,
 
-    title: getScenarioTitle(result),
-    subtitle: getScenarioSubtitle(result),
+    title: getDiagramTitle(result),
+    subtitle: getDiagramSubtitle(result),
 
     openSegment,
     closedSegment,

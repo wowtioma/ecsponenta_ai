@@ -4,7 +4,7 @@ import re
 
 from llm.answer import explain_placement, explain_rules
 from project_edits import ADDITIONAL_RECIPIENT_REQUEST, EDIT_REQUEST
-from rules import Session, evaluate
+from rules import Session, evaluate, flow_may_use_manual_transfer
 
 ACKNOWLEDGEMENT = re.compile(
     r"\s*(?:(?:спасибо|благодарю|понял[аи]?|понятно|хорошо|ок(?:ей)?|ясно|принято)[,!. ]*)+",
@@ -61,7 +61,7 @@ def explain_current_project(session: Session, message: str, questions: list[dict
         details = outcome["rule_details"][rule["id"]]
         recipient = details.get("to_device_name") or details.get("recipient")
         if recipient:
-            protocol = details.get("application_protocol") or rule.get("protocol")
+            protocol = details.get("application_protocol") or (rule.get("protocol") if rule["type"] == "data" else None)
             transport = " ".join(str(value) for value in (protocol, rule.get("port")) if value is not None)
             lines.append(f"«{rule['description']}» — получатель «{recipient}»" + (f", {transport}." if transport else "."))
     if len(rules) == 1 and rules[0]["type"] == "data":
@@ -74,7 +74,7 @@ def explain_current_project(session: Session, message: str, questions: list[dict
                 "Несколько отправителей сами по себе не увеличивают число правил."
             )
     if len(lines) == 1:
-        return explain_rules(rules)
+        return explain_rules(rules, result["networks"])
     return "\n".join(lines)
 
 
@@ -97,6 +97,40 @@ def _compatible(candidate, current):
     )
 
 
+def resolve_file_directions(previous: Session, extracted: Session, flow_id: str) -> Session | None:
+    """Turn a pending two-way description into two directed configurations."""
+    original = next((flow for flow in previous.flows if flow.id == flow_id), None)
+    if original is None or original.payload != "files" or original.direction != "two_way":
+        return None
+    from_id, to_id = original.source_network_id, original.target_network_id
+    reverse_options = [
+        flow for flow in extracted.flows
+        if flow.payload == "files" and (flow.source_network_id, flow.target_network_id) == (to_id, from_id)
+        and flow.direction == "one_way" and (flow.source_methods or flow.target_methods)
+    ]
+    if len(reverse_options) != 1:
+        return None
+
+    forward = original.model_copy(update={"direction": "one_way"})
+    snapshot = previous.model_copy(update={
+        "flows": [forward if flow.id == flow_id else flow for flow in previous.flows],
+        "unknown_answers": [key for key in previous.unknown_answers if key != f"{flow_id}.file_directions"],
+    })
+    merged = merge_project_extraction(snapshot, extracted, allow_addition=False)
+    reverse = reverse_options[0]
+    signature = reverse.model_dump(exclude={"id", "description"})
+    if any(flow.model_dump(exclude={"id", "description"}) == signature for flow in merged.flows):
+        return merged
+
+    ids = {flow.id for flow in merged.flows}
+    reverse_id = f"{flow_id}-reverse"
+    index = 2
+    while reverse_id in ids:
+        reverse_id = f"{flow_id}-reverse-{index}"
+        index += 1
+    return merged.model_copy(update={"flows": [*merged.flows, reverse.model_copy(update={"id": reverse_id})]})
+
+
 def merge_project_extraction(previous: Session, extracted: Session, *, allow_addition: bool) -> Session:
     """Keep agreed values and use extraction only to complete missing slots or add flows."""
     partial = previous.model_dump()
@@ -111,8 +145,11 @@ def merge_project_extraction(previous: Session, extracted: Session, *, allow_add
     matched_ids = set()
     for old, data in zip(previous.flows, partial["flows"]):
         candidate = extracted_by_id.get(old.id)
-        if candidate is None and len(previous.flows) == len(extracted.flows) == 1 and not allow_addition:
-            candidate = extracted.flows[0]
+        if not allow_addition and (candidate is None or not _compatible(candidate, old)):
+            # A follow-up may contain only the file flow, renumbered by the extractor.
+            options = [flow for flow in extracted.flows if _compatible(flow, old)]
+            if len(options) == 1 and sum(_compatible(options[0], flow) for flow in previous.flows) == 1:
+                candidate = options[0]
         if candidate is None or not _compatible(candidate, old):
             continue
         matched_ids.add(candidate.id)
@@ -125,12 +162,21 @@ def merge_project_extraction(previous: Session, extracted: Session, *, allow_add
                     continue
                 data[key] = value
             elif key in ("source_methods", "target_methods") and value and data[key]:
-                for agreed, proposal in zip(data[key], value):
-                    if agreed["mode"] == proposal["mode"]:
-                        for field in ("protocol", "storage", "trigger"):
+                settings = ("protocol", "storage", "trigger")
+                for agreed in data[key]:
+                    compatible = [
+                        proposal for proposal in value
+                        if agreed["mode"] == proposal["mode"] and all(
+                            agreed[field] is None or proposal[field] is None or agreed[field] == proposal[field]
+                            for field in settings
+                        )
+                    ]
+                    if len(compatible) == 1:
+                        for field in settings:
                             if agreed[field] is None:
-                                agreed[field] = proposal[field]
+                                agreed[field] = compatible[0][field]
 
+    added = []
     if allow_addition or not previous.flows:
         signatures = [
             {key: value for key, value in flow.items() if key not in ("id", "description")}
@@ -148,9 +194,26 @@ def merge_project_extraction(previous: Session, extracted: Session, *, allow_add
             if signature not in signatures:
                 partial["flows"].append(flow.model_dump())
                 signatures.append(signature)
+                added.append(flow)
 
-    if previous.manual_file_users is None and extracted.manual_file_users is not None:
+    if any(flow.payload == "files" for flow in added):
+        # Common profiles from earlier turns describe the previous set of flows.
+        partial["assumptions"].pop("same_file_checks", None)
+    if any(flow_may_use_manual_transfer(flow) for flow in added) and previous.flows:
+        partial["manual_users_count"] = None
+        if previous.manual_file_users is not None and extracted.manual_file_users:
+            partial["manual_file_users"] = list(dict.fromkeys([
+                *previous.manual_file_users, *extracted.manual_file_users,
+            ]))
+        else:
+            partial["manual_file_users"] = None
+        if "manual_users_count" in partial["unknown_answers"]:
+            partial["unknown_answers"].remove("manual_users_count")
+    elif previous.manual_file_users is None and extracted.manual_file_users is not None:
         partial["manual_file_users"] = extracted.manual_file_users
+
+    if "manual_users_count" in partial["unknown_answers"] and partial["manual_file_users"] is not None:
+        partial["unknown_answers"].remove("manual_users_count")
 
     # Confirmed values supersede an earlier «Не знаю», while unanswered slots stay open.
     for key in previous.unknown_answers:

@@ -40,63 +40,98 @@ export function fileUsersLabel(r: Result): string {
   return "не определено";
 }
 
-// Форматирование значений
-function fmt(value: unknown): string {
-  if (value === null || value === undefined || value === "") {
-    return "не указано";
-  }
+const NODE_NAMES: Record<string, string> = {
+  node_a: "Узел А",
+  node_b: "Узел В",
+  open: "Открытая сеть",
+  closed: "Закрытый сегмент",
+};
 
-  if (Array.isArray(value)) {
-    return value.map(fmt).join(", ");
-  }
+const FILE_MODE_NAMES: Record<string, string> = {
+  manual: "Вручную",
+  USB: "USB-носитель",
+  PULL: "Автоматический забор (PULL)",
+  PUSH: "Автоматическая доставка (PUSH)",
+};
 
-  if (typeof value === "object") {
-    return Object.values(value as Record<string, unknown>)
-      .map(fmt)
-      .join(", ");
-  }
-
-  if (typeof value === "boolean") {
-    return value ? "Да" : "Нет";
-  }
-
-  return String(value);
+function objectValue(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
 }
 
-// Методы файлового обмена
-export function methodsLabel(rule: Rule): string | null {
-  // USB отображается как самостоятельный способ передачи
-  if (rule.transport === "usb") {
-    return "USB-носитель";
-  }
-
-  const methods =
-    rule["methods_by_node"] ??
-    rule["file_methods"] ??
-    rule["methods"];
-
-  if (
-    methods === undefined ||
-    methods === null ||
-    methods === ""
-  ) {
-    return null;
-  }
-
-  return fmt(methods);
+function nonemptyText(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
 }
 
-// Проверки файлового обмена
-export function checksLabel(rule: Rule): string | null {
-  const checks = rule["checks_by_node"];
+function byNetwork(
+  result: Result,
+  values: unknown,
+  format: (value: unknown) => string,
+): string | null {
+  const entries = objectValue(values);
+  if (!entries) return format(values) || null;
 
-  if (
-    checks === undefined ||
-    checks === null ||
-    checks === ""
-  ) {
-    return null;
-  }
+  const labels = Object.entries(entries).flatMap(([id, value]) => {
+    const label = format(value);
+    const name = result.networks.find((network) => network.id === id)?.name
+      ?? NODE_NAMES[id] ?? id;
+    return label ? [`${name}: ${label}`] : [];
+  });
+  return labels.join("\n") || null;
+}
 
-  return fmt(checks);
+export function shortFileProtocols(label: string): string {
+  return [...new Set(label.split(";").map((method) => {
+    const name = method.split(",", 1)[0]?.trim() ?? "";
+    return name.startsWith("USB") ? "USB" : name;
+  }).filter(Boolean))].join(" / ");
+}
+
+export function usbEndpoint(rule: Rule): "from" | "to" | undefined {
+  if (rule.transport !== "usb") return undefined;
+  const targetMethods = objectValue(rule.methods_by_node)?.[rule.to];
+  return Array.isArray(targetMethods) && targetMethods.some((method) => objectValue(method)?.mode === "USB")
+    ? "to" : "from";
+}
+
+export function diagramFileMethodLabel(rule: Rule, networkId: string, label: string): string {
+  const methods = objectValue(rule.methods_by_node)?.[networkId];
+  const automation = Array.isArray(methods)
+    ? methods.map((method) => objectValue(method)?.mode)
+        .find((mode) => mode === "PULL" || mode === "PUSH")
+    : undefined;
+  return [automation, shortFileProtocols(label)].filter(Boolean).join(" ");
+}
+
+export function fileProtocolsLabel(result: Result, rule: Rule): string | null {
+  if (!rule.protocol && rule.transport === "usb") return "USB";
+  return byNetwork(result, rule.protocol, (value) => shortFileProtocols(nonemptyText(value)));
+}
+
+function formatMethod(value: unknown): string {
+  const method = objectValue(value);
+  if (!method) return nonemptyText(value);
+  const mode = nonemptyText(method.mode);
+  const protocol = nonemptyText(method.protocol);
+  const storage = nonemptyText(method.storage);
+  const trigger = method.trigger === "arrival" ? "при поступлении"
+    : method.trigger === "schedule" ? "по расписанию" : "";
+
+  return [FILE_MODE_NAMES[mode] ?? mode, protocol, trigger, storage].filter(Boolean).join(", ");
+}
+
+export function methodsLabel(result: Result, rule: Rule): string | null {
+  const detail = rule.methods_by_node ?? rule["file_methods"] ?? rule["methods"];
+  return byNetwork(result, detail, (value) =>
+    Array.isArray(value) ? value.map(formatMethod).filter(Boolean).join("; ") : formatMethod(value),
+  ) ?? (rule.transport === "usb" ? "USB-носитель" : null);
+}
+
+export function checksLabel(result: Result, rule: Rule): string | null {
+  return byNetwork(result, rule.checks_by_node ?? rule["checks"], (value) => {
+    if (!Array.isArray(value)) return nonemptyText(value);
+    if (value.length === 0) return "Без проверок";
+    return value.map(nonemptyText).filter(Boolean).join(", ");
+  });
 }

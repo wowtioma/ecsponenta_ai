@@ -68,11 +68,12 @@ GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
 # Соответствие «модель у Groq/Яндекса» -> «модель каталога OpenRouter + тариф».
 # По ТЗ §7 (стр. 157) при исполнении через другой API стоимость считается по
 # снимку тарифов OpenRouter именно этой модели. Значения — USD за 1M токенов.
+# Groq endpoint on https://openrouter.ai/openai/gpt-oss-20b (2026-11-21).
 GROQ_TO_OPENROUTER: dict[str, tuple[str, float, float]] = {
-    "openai/gpt-oss-20b": ("openai/gpt-oss-20b", 0.03, 0.14),
-    "openai/gpt-oss-120b": ("openai/gpt-oss-120b", 0.039, 0.19),
-    "gpt-oss-20b": ("openai/gpt-oss-20b", 0.03, 0.14),
-    "gpt-oss-120b": ("openai/gpt-oss-120b", 0.039, 0.19),
+    "openai/gpt-oss-20b": ("openai/gpt-oss-20b", 0.075, 0.30),
+    "openai/gpt-oss-120b": ("openai/gpt-oss-120b", 0.15, 0.60),
+    "gpt-oss-20b": ("openai/gpt-oss-20b", 0.075, 0.30),
+    "gpt-oss-120b": ("openai/gpt-oss-120b", 0.15, 0.60),
     "qwen/qwen3.8-27b": ("qwen/qwen3.8-27b", 0.10, 0.30),
 }
 
@@ -82,18 +83,19 @@ GIGACHAT_BASE_URL = os.getenv("GIGACHAT_BASE_URL", "https://gigachat.devices.sbe
 GIGACHAT_MODEL = os.getenv("GIGACHAT_MODEL", "GigaChat-Pro")
 
 
-def _groq_api_key() -> str:
+def groq_keys() -> tuple[str, ...]:
+    """Read configured credentials once per client, starting at the preferred slot."""
     values = dotenv_values(ROOT / ".env.groq") if dotenv_values else {}
     slot = (os.getenv("GROQ_ACTIVE_SLOT") or values.get("GROQ_ACTIVE_SLOT") or "").strip()
-    if not slot:
-        return GROQ_API_KEY
-    if slot not in {"1", "2", "3"}:
+    if slot and slot not in {"1", "2", "3"}:
         raise ValueError("GROQ_ACTIVE_SLOT должен быть 1, 2 или 3.")
-    name = f"GROQ_API_KEY_{slot}"
-    key = (os.getenv(name) or values.get(name) or "").strip()
-    if not key:
-        raise ValueError(f"Заполните {name} в локальном файле .env.groq.")
-    return key
+    slots = ["1", "2", "3"]
+    start = slots.index(slot) if slot else 0
+    names = [f"GROQ_API_KEY_{n}" for n in slots[start:] + slots[:start]]
+    if not slot:
+        names.insert(0, "GROQ_API_KEY")
+    keys = ((os.getenv(name) or values.get(name) or "").strip() for name in names)
+    return tuple(dict.fromkeys(key for key in keys if key))
 
 
 def active_provider() -> str:
@@ -110,7 +112,7 @@ def resolve_endpoint() -> tuple[str, str, str]:
             YANDEX_API_KEY,
         )
     if LLM_PROVIDER == "groq":
-        return (GROQ_BASE_URL, GROQ_MODEL, _groq_api_key())
+        return (GROQ_BASE_URL, GROQ_MODEL, next(iter(groq_keys()), ""))
     if LLM_PROVIDER == "gigachat":
         return (GIGACHAT_BASE_URL, GIGACHAT_MODEL, GIGACHAT_API_KEY)
     return (OPENROUTER_BASE_URL, DEFAULT_MODEL, OPENROUTER_API_KEY)
@@ -165,7 +167,7 @@ def provider_routing(model: str) -> dict | None:
 SYNONYX_BASE_DIR = Path(
     os.getenv(
         "SYNONYX_BASE_DIR",
-        str(ROOT / "Кейс АйТи Бастион — Синоникс" / "synonyx_base"),
+        str(ROOT / "synonyx_base"),
     )
 )
 
@@ -176,9 +178,7 @@ PRICE_LIMIT_INPUT = 0.10  # USD / 1M
 def knowledge_base_problem() -> str | None:
     """Проверяет базу знаний для RAG. Возвращает описание проблемы или None.
 
-    База `synonyx_base` не лежит в репозитории (материалы кейса в .gitignore),
-    поэтому при клонировании легко получить пустой индекс и непонятные
-    падения тестов. Функция нужна для понятного сообщения при старте.
+    Проверяет комплект из репозитория или каталог, заданный пользователем.
     """
     if not SYNONYX_BASE_DIR.is_dir():
         return (
@@ -224,10 +224,7 @@ def billable_tariff(served_model: str) -> tuple[str, float, float]:
     считается по каталоговому тарифу OpenRouter той же модели.
     """
     if LLM_PROVIDER == "groq" and served_model in GROQ_TO_OPENROUTER:
-        cat, p_in, p_out = GROQ_TO_OPENROUTER[served_model]
-        if cat in MODEL_TARIFFS:  # отдаём предпочтение каталоговому тарифу
-            p_in, p_out = MODEL_TARIFFS[cat]
-        return (cat, p_in, p_out)
+        return GROQ_TO_OPENROUTER[served_model]
     short = served_model.split("/")[-1] if served_model.startswith("gpt://") else served_model
     if LLM_PROVIDER == "yandex" and short in YANDEX_TO_OPENROUTER:
         cat, p_in, p_out = YANDEX_TO_OPENROUTER[short]

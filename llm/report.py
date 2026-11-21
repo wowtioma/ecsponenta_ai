@@ -13,30 +13,31 @@ from .journal import Journal
 def build_usage(journal: Journal, session_id: str) -> dict[str, Any]:
     """Блок usage по схеме кейса: токены, стоимость (оценочная и фактическая), calls."""
     calls = journal.calls(session_id)
-    if not calls:
+    measured = [call for call in calls if call.cost_source != "unknown"]
+    if not measured:
         return {
             "status": "not_measured",
-            "input_tokens": 0,
-            "output_tokens": 0,
+            "input_tokens": None,
+            "output_tokens": None,
             "input_cost_usd": None,
             "output_cost_usd": None,
             "evaluation_cost_usd": None,
             "actual_cost_usd": None,
-            "calls": [],
+            "calls": [_call_dict(call) for call in calls],
         }
 
-    input_tokens = sum(r.input_tokens for r in calls)
-    output_tokens = sum(r.output_tokens for r in calls)
-    cost_input = sum(r.cost_input for r in calls)
-    cost_output = sum(r.cost_output for r in calls)
-    cost_total = sum(r.cost_total for r in calls)
+    input_tokens = sum(r.input_tokens for r in measured)
+    output_tokens = sum(r.output_tokens for r in measured)
+    cost_input = sum(r.cost_input for r in measured)
+    cost_output = sum(r.cost_output for r in measured)
+    cost_total = sum(r.cost_total for r in measured)
 
     # Фактическая стоимость — только те вызовы, где провайдер вернул usage.cost.
     provider_calls = [r for r in calls if r.cost_source == "provider"]
     actual = sum(r.cost_total for r in provider_calls) if provider_calls else None
 
     return {
-        "status": "measured",
+        "status": "measured" if len(measured) == len(calls) else "partial",
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
         "input_cost_usd": cost_input,
@@ -56,19 +57,20 @@ def _call_dict(r) -> dict[str, Any]:
         "turn_id": r.turn_id,
         "call_id": r.call_id,
         "model_id": r.model_id,
+        "provider_variant": r.provider_variant,
         "purpose": r.purpose,
         "started_at": r.started_at,
         "finished_at": r.finished_at,
         "status": r.status,
-        "input_tokens": r.input_tokens,
-        "output_tokens": r.output_tokens,
+        "input_tokens": r.input_tokens if r.cost_source != "unknown" else None,
+        "output_tokens": r.output_tokens if r.cost_source != "unknown" else None,
         "cached_tokens": r.cached_tokens,
         "reasoning_tokens": r.reasoning_tokens,
         "prompt_price": r.prompt_price,
         "completion_price": r.completion_price,
-        "cost_input_usd": r.cost_input,
-        "cost_output_usd": r.cost_output,
-        "cost_total_usd": r.cost_total,
+        "cost_input_usd": r.cost_input if r.cost_source != "unknown" else None,
+        "cost_output_usd": r.cost_output if r.cost_source != "unknown" else None,
+        "cost_total_usd": r.cost_total if r.cost_source != "unknown" else None,
         "cost_source": r.cost_source,
         "provider_response_id": r.provider_response_id,
     }

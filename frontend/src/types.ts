@@ -4,7 +4,7 @@ import { z } from "zod";
 export const networkSchema = z.object({
   id: z.string(),
   name: z.string(),
-  trust: z.enum(["open", "closed"]),
+  trust: z.enum(["open", "closed"]).nullable(),
 });
 
 export const ruleSchema = z
@@ -97,7 +97,10 @@ export const resultSchema = z
       "unsupported",
     ]),
     unknowns: z.array(z.string()).default([]),
-    assumptions: z.array(z.string()).default([]),
+    assumptions: z.array(z.union([
+      z.string(),
+      z.object({ id: z.string(), value: z.string() }),
+    ])).default([]),
     devices: z.array(deviceSchema).default([]),
     sources: z.array(sourceSchema).default([]),
     requests_for_vendor: z.array(z.unknown()).default([]),

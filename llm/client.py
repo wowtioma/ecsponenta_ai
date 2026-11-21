@@ -50,7 +50,11 @@ class LLMClient:
         self.provider = config.active_provider()
         self._client = None
         self._rate_lock = Lock()
-        self._groq_retry_at = 0.0
+        self._keys = (self.api_key,)
+        if self.provider == "groq" and api_key is None and base_url is None:
+            self._keys = tuple(dict.fromkeys((self.api_key, *config.groq_keys())))
+        self._active_key = 0
+        self._retry_at = [0.0] * len(self._keys)
 
     def _ensure(self):
         if self._client is None:
@@ -71,6 +75,7 @@ class LLMClient:
                 base_url=self.base_url,
                 api_key=self.api_key,
                 default_headers=headers,
+                timeout=15.0,
                 **({"max_retries": 0} if self.provider == "groq" else {}),
             )
         return self._client
@@ -90,31 +95,36 @@ class LLMClient:
             body["provider"] = routing
         return body
 
-    def _complete(self, client, **kwargs):
+    def _complete(self, client, *, on_limit=None, **kwargs):
         if self.provider != "groq":
             return client.chat.completions.create(**kwargs)
 
         from openai import RateLimitError
 
-        with self._rate_lock:
-            remaining = math.ceil(self._groq_retry_at - time.monotonic())
-        if remaining > 0:
-            raise GroqRateLimit(remaining)
-
-        try:
-            return client.chat.completions.create(**kwargs)
-        except RateLimitError as error:
-            header = error.response.headers.get("retry-after")
-            try:
-                seconds = float(header or "60")
-            except ValueError:
-                seconds = 60
-            seconds = max(1, math.ceil(seconds)) if math.isfinite(seconds) else 60
+        attempted = set()
+        while True:
             with self._rate_lock:
                 now = time.monotonic()
-                self._groq_retry_at = max(self._groq_retry_at, now + seconds)
-                remaining = math.ceil(self._groq_retry_at - now)
-            raise GroqRateLimit(remaining) from None
+                order = [(self._active_key + n) % len(self._keys) for n in range(len(self._keys))]
+                index = next((i for i in order if i not in attempted and self._retry_at[i] <= now), None)
+                if index is None:
+                    raise GroqRateLimit(max(1, math.ceil(min(self._retry_at) - now)))
+                self._active_key = index
+            attempted.add(index)
+            sdk = client if index == 0 else client.with_options(api_key=self._keys[index])
+            started = time.time()
+            try:
+                return sdk.chat.completions.create(**kwargs)
+            except RateLimitError as error:
+                try:
+                    seconds = float(error.response.headers.get("retry-after", "60"))
+                except ValueError:
+                    seconds = 60
+                seconds = max(1, math.ceil(seconds)) if math.isfinite(seconds) else 60
+                with self._rate_lock:
+                    self._retry_at[index] = max(self._retry_at[index], time.monotonic() + seconds)
+                if on_limit:
+                    on_limit(started)
 
     def chat(
         self,
@@ -125,6 +135,8 @@ class LLMClient:
         turn_id: int = 0,
         temperature: float = 0.0,
         max_tokens: int = 1024,
+        timeout: float | None = None,
+        response_schema: dict | None = None,
     ) -> tuple[str, CallRecord]:
         """Один вызов. Возвращает (текст, запись журнала)."""
         client = self._ensure()
@@ -132,15 +144,40 @@ class LLMClient:
         started = time.time()
 
         extra_body = self._provider_body()
-        if self.provider == "groq" and purpose in {"extract", "edit_project"}:
+        if self.provider == "groq" and purpose == "fact" and self.model.startswith("openai/gpt-oss-"):
+            extra_body["reasoning_effort"] = "low"
+        if self.provider == "groq" and purpose in {"extract", "edit_project", "reply_wording"}:
             extra_body.update(response_format={"type": "json_object"}, reasoning_effort="low")
+            if response_schema is not None and self.model in {
+                "openai/gpt-oss-20b", "openai/gpt-oss-120b", "qwen/qwen3.8-27b",
+            }:
+                extra_body["response_format"] = {
+                    "type": "json_schema",
+                    "json_schema": {"name": "network_exchange", "strict": True, "schema": response_schema},
+                }
+        catalog_id, p_in, p_out = config.billable_tariff(self.model)
+
+        def record_limit(attempt_start):
+            nonlocal started
+            finished = time.time()
+            self.journal.add(CallRecord(
+                session_id=session_id, turn_id=turn_id, call_id=uuid.uuid4().hex,
+                model_id=catalog_id, purpose=purpose, input_tokens=0, output_tokens=0,
+                prompt_price=p_in, completion_price=p_out, cost_source="unknown",
+                provider_variant=self.provider,
+                status="rate_limited", started_at=attempt_start, finished_at=finished,
+            ))
+            started = finished
+
         resp = self._complete(
             client,
+            on_limit=record_limit,
             model=self.model,
             messages=messages,
             temperature=temperature,
             max_tokens=max_tokens,
             extra_body=extra_body,
+            **({"timeout": timeout} if timeout is not None else {}),
         )
 
         choice = resp.choices[0]
@@ -167,7 +204,6 @@ class LLMClient:
 
         # Стоимость (ТЗ §7): при исполнении через Яндекс считаем по КАТАЛОГОВОМУ
         # тарифу OpenRouter для той же модели, а не по яндексовскому.
-        catalog_id, p_in, p_out = config.billable_tariff(self.model)
         # Фактическую стоимость провайдера берём только для профиля openrouter.
         provider_cost = getattr(usage, "cost", None) if self.provider == "openrouter" else None
 
@@ -181,7 +217,7 @@ class LLMClient:
             cost_input = prompt_tokens * p_in / 1_000_000.0
             cost_output = completion_tokens * p_out / 1_000_000.0
             cost_total = cost_input + cost_output
-            cost_source = "estimated"
+            cost_source = "estimated" if usage is not None else "unknown"
 
         rec = CallRecord(
             session_id=session_id,
@@ -203,6 +239,7 @@ class LLMClient:
             started_at=started,
             finished_at=time.time(),
             status="ok",
+            provider_variant=self.provider,
             provider_response_id=getattr(resp, "id", ""),
             raw_usage=raw_usage,
         )

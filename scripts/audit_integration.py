@@ -24,7 +24,7 @@ def clarification(case, outcome):
             value = "Не знаю"
         elif case in ("F07", "F04", "N05"):
             checks = {"F04": "маска имени, размер, внешний антивирус", "F07": "внешний антивирус", "N05": "внешний антивирус"}
-            values = {"port": "Не знаю", "source_checks": checks[case], "target_checks": "Без проверок",
+            values = {"manual_users_count": "1", "port": "Не знаю", "source_checks": checks[case], "target_checks": "Без проверок",
                       "access_group": "Один подрядчик, разделение доступа не требуется" if case != "F04" else "Да",
                       "storage": "Файловый сервер цеха", "protocol": "SMB"}
             value = values.get(field)
@@ -39,14 +39,24 @@ def clarification(case, outcome):
 
 def rules_check(expected, result):
     keys = ("type", "from", "to", "mode", "protocol", "port", "checks")
-    def key(rule):
-        values = [sorted(rule[k]) if k == "checks" and isinstance(rule.get(k), list) else rule.get(k) for k in keys]
-        return json.dumps(values, ensure_ascii=False, sort_keys=True)
+    def rule_keys(rules, networks):
+        sides = {network["id"]: network["trust"] or network["id"] for network in networks}
+        normalized = []
+        for rule in rules:
+            values = {key: rule.get(key) for key in keys}
+            for key in ("from", "to"):
+                values[key] = sides.get(values[key], values[key])
+            if isinstance(values["protocol"], dict):
+                values["protocol"] = {sides.get(k, k): v for k, v in values["protocol"].items()}
+            if isinstance(values["checks"], list):
+                values["checks"] = sorted(values["checks"])
+            normalized.append(json.dumps(values, ensure_ascii=False, sort_keys=True))
+        return sorted(normalized)
     actual_rules = result.get("rules", [])
     problems = []
     if result.get("rules_count") != expected["rules_count"]:
         problems.append("rule count")
-    if sorted(map(key, actual_rules)) != sorted(map(key, expected["rules"])):
+    if rule_keys(actual_rules, result.get("networks", [])) != rule_keys(expected["rules"], expected["networks"]):
         problems.append("rule parameters")
     if result.get("file_users_count") != expected.get("file_users_count"):
         problems.append("file users")

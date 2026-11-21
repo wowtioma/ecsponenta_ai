@@ -18,7 +18,17 @@ def session_from_extraction(session_id: str, extraction: dict) -> Session:
         "направление/режим каждого потока (regex-фолбэк)" in extraction.get("unknowns", [])
     )
     flows = []
-    for index, item in enumerate(extraction.get("flows", []), 1):
+    items = extraction.get("flows", [])
+    reserved_ids = {item["id"] for item in items if isinstance(item.get("id"), str) and item["id"].strip()}
+    used_ids = set()
+    next_id = 1
+    for item in items:
+        flow_id = item.get("id")
+        if not isinstance(flow_id, str) or not flow_id.strip() or flow_id in used_ids:
+            while f"flow-{next_id}" in reserved_ids | used_ids:
+                next_id += 1
+            flow_id = f"flow-{next_id}"
+        used_ids.add(flow_id)
         source = item.get("from")
         target = item.get("to")
         if source not in networks_by_id:
@@ -47,7 +57,7 @@ def session_from_extraction(session_id: str, extraction: dict) -> Session:
             network_labels = {"офис", "цех", "офисная сеть", "сеть цеха", "открытая сеть", "закрытая сеть"}
             if target_network:
                 network_labels.add(target_network.name.strip().casefold())
-            if payload == "data" and label in network_labels:
+            if payload == "data" and label in network_labels and not item.get("recipient_confirmed_role"):
                 recipient = None
         source_device = item.get("source_device")
         if isinstance(source_device, str):
@@ -58,7 +68,7 @@ def session_from_extraction(session_id: str, extraction: dict) -> Session:
         else:
             source_device = None
         flow = {
-            "id": item.get("id") or f"flow-{index}",
+            "id": flow_id,
             "source_network_id": source,
             "target_network_id": target,
             "payload": payload,
@@ -81,7 +91,12 @@ def session_from_extraction(session_id: str, extraction: dict) -> Session:
             )
         flows.append(Flow.model_validate(flow))
     return Session(session_id=session_id, networks=networks, flows=flows,
+                   assumptions={"same_file_checks": "yes"} if extraction.get("same_file_checks") else {},
                    manual_file_users=extraction.get("manual_file_users"),
+                   unknown_answers=[
+                       f"{flow.id}.port" for flow in flows
+                       if flow.port is None and flow.protocol in extraction.get("confirmed_unknown_ports", [])
+                   ],
                    requests_for_vendor=extraction.get("requests_for_vendor", []))
 
 

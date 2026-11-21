@@ -9,6 +9,7 @@ import csv
 import io
 import json
 import time
+from threading import Lock
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -71,16 +72,19 @@ class Journal:
 
     def __init__(self) -> None:
         self._by_call: dict[str, CallRecord] = {}
+        self._lock = Lock()
 
     def add(self, rec: CallRecord) -> bool:
         """Добавляет запись. Возвращает False, если call_id уже учтён (не дублирует)."""
-        if rec.call_id in self._by_call:
-            return False
-        self._by_call[rec.call_id] = rec
-        return True
+        with self._lock:
+            if rec.call_id in self._by_call:
+                return False
+            self._by_call[rec.call_id] = rec
+            return True
 
     def calls(self, session_id: str | None = None) -> list[CallRecord]:
-        recs = list(self._by_call.values())
+        with self._lock:
+            recs = list(self._by_call.values())
         recs.sort(key=lambda r: r.started_at)
         if session_id is not None:
             recs = [r for r in recs if r.session_id == session_id]

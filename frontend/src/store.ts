@@ -14,6 +14,7 @@ type State = {
   explanation: string;
   loading: boolean;
   lastText: string | null;
+  lastAnswers: Record<string, string> | undefined;
   timings: number[];
 
   // Накопленный расход за сессию: токены и деньги
@@ -23,7 +24,7 @@ type State = {
   // актуальным ответом на последний запрос
   resultIsStale: boolean;
 
-  send: (text: string) => Promise<void>;
+  send: (text: string, answers?: Record<string, string>) => Promise<void>;
   retry: () => Promise<void>;
   reset: () => void;
 };
@@ -32,18 +33,19 @@ export const useStore = create<State>((set, get) => {
   // Защита от записи ответа старого запроса после сброса сессии
   let activeRequest = 0;
 
-  const run = async (text: string) => {
+  const run = async (text: string, answers?: Record<string, string>) => {
     const requestId = ++activeRequest;
     const t0 = performance.now();
 
     set((state) => ({
       loading: true,
       lastText: text,
+      lastAnswers: answers,
       resultIsStale: state.result !== null,
     }));
 
     try {
-      const reply = await askAi(text, get().result);
+      const reply = await askAi(text, get().result, answers);
 
       // Игнорируем ответ, если сессия уже была сброшена
       if (requestId !== activeRequest) return;
@@ -134,12 +136,13 @@ export const useStore = create<State>((set, get) => {
     explanation: "",
     loading: false,
     lastText: null,
+    lastAnswers: undefined,
     timings: [],
     usage: EMPTY_USAGE,
     resultIsStale: false,
 
     // Отправка нового сообщения
-    send: async (text) => {
+    send: async (text, answers) => {
       if (get().loading || !text.trim()) return;
 
       const userMsg: Message = {
@@ -152,7 +155,7 @@ export const useStore = create<State>((set, get) => {
         messages: [...state.messages, userMsg],
       }));
 
-      await run(text);
+      await run(text, answers);
     },
 
     // Повтор последнего запроса
@@ -165,7 +168,7 @@ export const useStore = create<State>((set, get) => {
         messages: state.messages.filter((message) => !message.isError),
       }));
 
-      await run(text);
+      await run(text, get().lastAnswers);
     },
 
     // Полный сброс сессии
@@ -181,6 +184,7 @@ export const useStore = create<State>((set, get) => {
         explanation: "",
         loading: false,
         lastText: null,
+    lastAnswers: undefined,
         timings: [],
         usage: EMPTY_USAGE,
         resultIsStale: false,

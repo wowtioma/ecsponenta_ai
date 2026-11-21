@@ -195,10 +195,17 @@ def _display(value, networks):
         return "да" if value else "нет"
     if isinstance(value, list):
         return ", ".join(
-            " / ".join(str(item[field]) for field in ("mode", "protocol", "storage", "trigger") if item.get(field))
+            ", ".join(
+                {"arrival": "при поступлении", "schedule": "по расписанию", "manual": "вручную"}.get(
+                    item[field], str(item[field])
+                )
+                for field in ("mode", "protocol", "storage", "trigger") if item.get(field)
+            )
             if isinstance(item, dict) else str(item)
             for item in value
         ) or "нет"
+    if value == "shared":
+        return "общий доступ"
     return networks.get(value, DIRECTION_LABELS.get(value, str(value)))
 
 

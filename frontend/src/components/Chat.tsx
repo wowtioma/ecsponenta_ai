@@ -19,40 +19,44 @@ function QuestionCard({
 }: {
   questions: Question[];
   disabled: boolean;
-  onSubmit: (text: string) => void;
+  onSubmit: (text: string, answers: Record<string, string>) => void;
 }) {
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [other, setOther] = useState<Record<string, string>>({});
   const [sent, setSent] = useState(false);
 
-  const ready = questions.every(
-    (q) =>
-      answers[q.id] &&
-      (answers[q.id] !== OTHER || (other[q.id] ?? "").trim() !== "")
+  const answered = questions.filter(
+    (q) => answers[q.id] && (answers[q.id] !== OTHER || other[q.id]?.trim())
   );
+  const ready = answered.length > 0;
 
   const submit = () => {
     if (!ready || sent || disabled) return;
 
-    const text = questions
-      .map((q) => {
-        const answer =
-          answers[q.id] === OTHER
-            ? other[q.id].trim()
-            : answers[q.id];
-
-        return questions.length > 1
-          ? `${q.text} ${answer}`
-          : answer;
-      })
-      .join("\n");
+    const values = Object.fromEntries(answered.map((q) => [
+      q.id, answers[q.id] === OTHER ? other[q.id].trim() : answers[q.id],
+    ]));
+    const text = answered.length === 1 ? values[answered[0].id]
+      : answered.map((q) => `${q.text} ${values[q.id]}`).join("\n");
 
     setSent(true);
-    onSubmit(text);
+    onSubmit(text, values);
   };
 
   return (
     <div className="app-message__questions">
+      {questions.length >= 4 && !disabled && !sent && (
+        <button
+          type="button"
+          className="app-button app-button-outline app-button-sm"
+          onClick={() => setAnswers((current) => ({
+            ...Object.fromEntries(questions.map((q) => [q.id, "Не знаю"])),
+            ...current,
+          }))}
+        >
+          Отметить «Не знаю» в остальных
+        </button>
+      )}
       {questions.map((q) => (
         <div key={q.id}>
           <div className="app-question__text">{q.text}</div>
@@ -156,7 +160,7 @@ export default function Chat() {
           </div>
         )}
 
-        {messages.map((m) => (
+        {messages.map((m, index) => (
           <div
             key={m.id}
             className={`app-message app-message--${m.role}${
@@ -190,7 +194,7 @@ export default function Chat() {
               {m.questions && m.questions.length > 0 && (
                 <QuestionCard
                   questions={m.questions}
-                  disabled={loading}
+                  disabled={loading || index !== messages.length - 1}
                   onSubmit={send}
                 />
               )}

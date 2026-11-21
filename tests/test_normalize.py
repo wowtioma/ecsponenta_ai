@@ -58,12 +58,12 @@ class TestNormalizeFlows(unittest.TestCase):
         # [] означает «явно без проверок» (не None)
         self.assertEqual(f["target_checks"], [])
 
-    def test_missing_check_side_filled(self):
+    def test_missing_check_side_stays_unknown(self):
         d = self._data([{"source_checks": ["маска имени"], "target_checks": None}])
         _normalize_flows(d)
         f = d["flows"][0]
         self.assertEqual(f["source_checks"], ["маска имени"])
-        self.assertEqual(f["target_checks"], [])
+        self.assertIsNone(f["target_checks"])
 
     def test_english_checks_canonicalized(self):
         d = self._data([{"source_checks": ["mask name", "size", {"type": "ICAP:антивирус"}]}])
@@ -82,10 +82,10 @@ class TestNormalizeFlows(unittest.TestCase):
         f = d["flows"][0]
         self.assertEqual((f["from"], f["to"]), ("open", "closed"))
 
-    def test_same_network_flow_dropped(self):
+    def test_same_network_flow_retained_for_validation(self):
         d = self._data([{"from": "closed", "to": "closed"}])
         _normalize_flows(d)
-        self.assertEqual(d["flows"], [])
+        self.assertEqual(d["flows"][0]["from"], d["flows"][0]["to"])
 
     def test_manual_users_from_text(self):
         d = self._data(

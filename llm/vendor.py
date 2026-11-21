@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import re
 from typing import Any
 
 # Маркеры «неподдерживаемого» -> пояснение. Ключ ищется в тексте без учёта регистра.
@@ -29,19 +30,30 @@ KNOWN_UNSUPPORTED: list[tuple[str, str]] = [
 _BUILTIN_AV_DESC = "встроенный антивирус (есть только внешние по ICAP)"
 
 
-def _has_builtin_av(low: str) -> bool:
-    """«Встроенный антивирус» в любом падеже: основа «встроенн» + «антивирус»."""
-    return "антивирус" in low and "встроенн" in low
+def _requested(pattern: str, text: str) -> bool:
+    for clause in re.split(r"[.!?;,:\n]|\bно\b", text):
+        for match in re.finditer(pattern, clause):
+            before = clause[:match.start()]
+            after = clause[match.end():]
+            if re.search(r"\b(?:без|нет|не нужно|не нужен|не нужна|не требуется|не используем)\s*$", before):
+                continue
+            if re.match(r"\w*\s+не\s+(?:нуж\w*|требу\w*|использу\w*)\b", after):
+                continue
+            return True
+    return False
 
 
 def detect_unsupported(text: str) -> list[str]:
-    """Возвращает список найденных неподдерживаемых потребностей (описания)."""
+    """Возвращает явно запрошенные неподдерживаемые функции."""
     low = text.lower()
     found: list[str] = []
-    if _has_builtin_av(low):
+    if _requested(r"доступ\s+(?:ко?\s+|на\s+)(?:всей?\s+)?(?:[а-яё-]+\s+)?подсет", low):
+        found.append("открытие доступа на подсеть/диапазон адресов")
+    if _requested(r"\bвстроенн\w*\s+антивирус\w*", low):
         found.append(_BUILTIN_AV_DESC)
     for marker, desc in KNOWN_UNSUPPORTED:
-        if marker in low and desc not in found:
+        pattern = r"\bpam\b" if marker == "pam" else r"\b" + re.escape(marker)
+        if desc not in found and _requested(pattern, low):
             found.append(desc)
     return found
 

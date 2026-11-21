@@ -32,19 +32,43 @@ def explain_placement(cfg: dict) -> str:
     return "\n".join(lines)
 
 
-def explain_rules(rules: list[dict]) -> str:
-    """Текст «Правил Синоникса: N» + по одной строке на правило (методика §6.5)."""
+def explain_rules(rules: list[dict], networks=()) -> str:
+    """Explain calculated rules using the same parameters shown in the table."""
     if not rules:
         return "Правил Синоникса: 0."
-    out = [f"Правил Синоникса: {len(rules)}."]
-    for r in rules:
-        mode = MODE_RU.get(r.get("mode", ""), r.get("mode", ""))
-        proto = r.get("protocol", "")
-        port = r.get("port")
-        proto_str = f"{proto} {port}" if port is not None else str(proto)
-        desc = r.get("description", "")
-        out.append(f"{r.get('id', '')}. {desc}: {proto_str}, {mode} правило.")
-    return "\n".join(out)
+    names = {"open": "Открытая сеть", "closed": "Закрытый сегмент",
+             "node_a": "Узел А", "node_b": "Узел В"}
+    names.update({network["id"]: network["name"] for network in networks})
+    lines = [f"Правил Синоникса: {len(rules)}.", ""]
+    for rule in rules:
+        mode = MODE_RU.get(rule.get("mode", ""), rule.get("mode", ""))
+        protocol = rule.get("protocol")
+        desc = rule.get("description") or "Передача"
+        if rule.get("type") == "file":
+            if isinstance(protocol, dict):
+                methods = "; ".join(f"{names.get(side, side)} — {label}"
+                                    for side, label in protocol.items() if label)
+            else:
+                methods = protocol or ("USB-носитель на Узле А" if rule.get("transport") == "usb" else "")
+            text = f"{desc}. {mode.capitalize()} файловое правило."
+            if methods:
+                text += f" Способы передачи: {methods}."
+            checks = rule.get("checks_by_node")
+            if isinstance(checks, dict) and checks:
+                text += " Проверки: " + "; ".join(
+                    f"{names.get(side, side)} — {', '.join(items) if items else 'без проверок'}"
+                    for side, items in checks.items()
+                ) + "."
+            elif rule.get("checks"):
+                text += " Проверки: " + ", ".join(rule["checks"]) + "."
+            lines.append(f"{rule.get('id', '')}. {text}")
+            continue
+        port = rule.get("port")
+        params = protocol or "протокол не указан"
+        if port is not None:
+            params = f"{params} {port}"
+        lines.append(f"{rule.get('id', '')}. {desc}: {params}, {mode} правило.")
+    return "\n".join(lines)
 
 
 def _context_block(hits: list[dict]) -> str:
@@ -85,6 +109,8 @@ def answer_fact(
         session_id=session_id,
         turn_id=turn_id,
         temperature=0.0,
-        max_tokens=512,
+        max_tokens=1024,
     )
+    if not reply.strip():
+        return hits[0]["text"], hits
     return reply, hits

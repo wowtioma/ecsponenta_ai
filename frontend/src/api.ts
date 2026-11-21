@@ -17,7 +17,11 @@ export function resetSession() {
   localStorage.removeItem("session_id");
 }
 
-export async function askAi(message: string, current: Result | null): Promise<ChatResponse> {
+export async function askAi(
+  message: string,
+  current: Result | null,
+  answers?: Record<string, string>,
+): Promise<ChatResponse> {
   if (USE_MOCK) return mockAnswer(message, current);
 
   const controller = new AbortController();
@@ -27,7 +31,7 @@ export async function askAi(message: string, current: Result | null): Promise<Ch
     const res = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session_id: getSessionId(), message, current_result: current }),
+      body: JSON.stringify({ session_id: getSessionId(), message, current_result: current, answers }),
       signal: controller.signal,
     });
 
@@ -43,7 +47,7 @@ export async function askAi(message: string, current: Result | null): Promise<Ch
     const json = await res.json();
     const parsed = chatResponseSchema.safeParse(json);
     if (!parsed.success) {
-      console.error("Неверный формат ответа бэкенда", parsed.error, json);
+      console.error("Неверный формат ответа бэкенда", parsed.error.issues);
       throw new Error("Бэкенд вернул ответ в неожиданном формате");
     }
     return parsed.data;
