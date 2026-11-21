@@ -118,21 +118,286 @@ def _parse_json_lenient(text: str) -> dict:
     raise ValueError("Не удалось распарсить JSON из ответа модели")
 
 
-def _normalize_flows(data: dict) -> None:
-    """Гарантирует поля recipient и initiator_network_id у каждого потока.
+_METHOD_MODES = {"manual": "manual", "usb": "USB", "pull": "PULL", "push": "PUSH"}
+_FILE_PROTOCOLS = {"SFTP", "FTP", "SMB"}
 
-    Участок A (core/rules.py) ждёт эти поля на стыке B → A. Если модель их не
-    вернула, initiator_network_id безопасно выводится из from: для
-    двунаправленного правила from — сторона инициатора (ТЗ §10), для
-    однонаправленного — сторона-отправитель.
-    """
-    for f in data.get("flows", []):
-        if not isinstance(f, dict):
+# Канонический словарь проверок (как в бенчмарках и методике).
+_CHECK_CANON = (
+    "маска имени",
+    "тип и расширение",
+    "размер",
+    "целостность",
+    "ICAP: внешний антивирус",
+    "ICAP: песочница",
+    "ICAP: DLP",
+)
+
+
+def _canonical_check(text: str) -> str:
+    """Приводит проверку к канонической формулировке (в т.ч. с английского)."""
+    key = " ".join(str(text).replace("_", " ").strip().lower().split())
+    if not key:
+        return ""
+    # точные синонимы
+    exact = {
+        "маска имени": "маска имени",
+        "mask name": "маска имени",
+        "mask": "маска имени",
+        "размер": "размер",
+        "size": "размер",
+        "тип и расширение": "тип и расширение",
+        "тип/расширение": "тип и расширение",
+        "целостность": "целостность",
+        "integrity": "целостность",
+        "icap:антивирус": "ICAP: внешний антивирус",
+        "icap: антивирус": "ICAP: внешний антивирус",
+        "icap: внешний антивирус": "ICAP: внешний антивирус",
+        "антивирус": "ICAP: внешний антивирус",
+        "внешний антивирус": "ICAP: внешний антивирус",
+        "antivirus": "ICAP: внешний антивирус",
+        "песочница": "ICAP: песочница",
+        "sandbox": "ICAP: песочница",
+        "icap: песочница": "ICAP: песочница",
+        "dlp": "ICAP: DLP",
+        "icap: dlp": "ICAP: DLP",
+    }
+    if key in exact:
+        return exact[key]
+    # частичные совпадения
+    if "маск" in key or "mask" in key:
+        return "маска имени"
+    if "размер" in key or "size" in key:
+        return "размер"
+    if "целост" in key or "integrity" in key:
+        return "целостность"
+    if "песочниц" in key or "sandbox" in key:
+        return "ICAP: песочница"
+    if "dlp" in key:
+        return "ICAP: DLP"
+    if "антивирус" in key or "antivirus" in key:
+        return "ICAP: внешний антивирус"
+    if "тип" in key or "расширен" in key or "extension" in key:
+        return "тип и расширение"
+    return str(text).strip()
+
+
+def _norm_methods(value: Any) -> list[dict] | None:
+    """Приводит source_methods/target_methods к модели A (FileMethod)."""
+    if not isinstance(value, list):
+        return None
+    out: list[dict] = []
+    for item in value:
+        if not isinstance(item, dict):
             continue
-        f.setdefault("recipient", None)
-        f.setdefault("initiator_network_id", None)
-        if f.get("initiator_network_id") is None and f.get("from"):
+        mode = _METHOD_MODES.get(str(item.get("mode") or "").strip().lower())
+        if mode is None:
+            continue
+        proto = item.get("protocol")
+        proto = proto.upper() if isinstance(proto, str) else None
+        if proto not in _FILE_PROTOCOLS:
+            proto = None
+        trigger = item.get("trigger")
+        if trigger not in ("arrival", "schedule"):
+            trigger = None
+        storage = item.get("storage")
+        out.append(
+            {
+                "mode": mode,
+                "protocol": proto,
+                "storage": storage.strip() if isinstance(storage, str) and storage.strip() else None,
+                "trigger": trigger,
+            }
+        )
+    return out or None
+
+
+def _norm_checks(value: Any) -> list[str] | None:
+    """Список проверок в канонической формулировке.
+
+    None — сторона не определена; [] — явно без проверок. Разница важна для A:
+    при None он задаёт уточняющий вопрос, при [] — принимает как есть.
+    """
+    if value is None:
+        return None
+    items = value if isinstance(value, list) else [value]
+    result: list[str] = []
+    for item in items:
+        if isinstance(item, dict):
+            item = (
+                item.get("type")
+                or item.get("name")
+                or item.get("check")
+                or item.get("value")
+                or ""
+            )
+        canon = _canonical_check(item)
+        if canon:
+            result.append(canon)
+    # убрать дубли, сохранив порядок
+    seen: set[str] = set()
+    return [x for x in result if not (x in seen or seen.add(x))]
+
+
+_MANUAL_ROLES = ("подрядчик", "инженер", "сотрудник", "оператор", "специалист", "администратор")
+
+# Текстовые маркеры проверок — страховка, если модель не заполнила профиль.
+_CHECK_TEXT_MARKERS = (
+    ("маск", "маска имени"),
+    ("имени файла", "маска имени"),
+    ("размер", "размер"),
+    ("целост", "целостность"),
+    ("расширен", "тип и расширение"),
+    ("тип файла", "тип и расширение"),
+    ("песочниц", "ICAP: песочница"),
+    ("dlp", "ICAP: DLP"),
+    ("антивирус", "ICAP: внешний антивирус"),
+)
+
+
+def _checks_from_text(text: str) -> list[str]:
+    """Проверки, упомянутые в исходном тексте (для страховки)."""
+    low = text.lower()
+    if "без проверок" in low:
+        return []
+    found: list[str] = []
+    for marker, canon in _CHECK_TEXT_MARKERS:
+        if marker in low and canon not in found:
+            found.append(canon)
+    return found
+
+
+def _normalize_flows(data: dict, text: str = "") -> None:
+    """Нормализует слоты под модель участка A (rules.Flow / rules.Session).
+
+    Гарантирует всё, что читает b_adapter участка A:
+    - from/to/initiator_network_id — только id объявленных сетей;
+    - port — целое 1..65535 или None (у A строгая валидация);
+    - source_methods/target_methods — по модели FileMethod (manual/USB/PULL/PUSH);
+    - source_checks/target_checks — канонические списки; если проверки заданы
+      только с одной стороны, у второй явно фиксируется [] (A требует обе);
+    - access_group = "shared" при одном пользователе или чистой автоматике;
+    - USB-поток направляется от открытой сети к закрытой (Узел А);
+    - manual_file_users / requests_for_vendor на верхнем уровне.
+    """
+    networks = data.get("networks") or []
+    net_ids = {n.get("id") for n in networks if isinstance(n, dict) and n.get("id")}
+    open_id = next(
+        (n.get("id") for n in networks if isinstance(n, dict) and n.get("trust") == "open"),
+        None,
+    )
+    closed_id = next(
+        (n.get("id") for n in networks if isinstance(n, dict) and n.get("trust") == "closed"),
+        None,
+    )
+    flows = [f for f in data.get("flows", []) if isinstance(f, dict)]
+
+    # --- проход 1: ссылки на сети, порт, способы передачи ---
+    for f in flows:
+        for key in ("from", "to", "initiator_network_id"):
+            if f.get(key) not in net_ids:
+                f[key] = None
+        if f.get("initiator_network_id") is None and f.get("from") in net_ids:
             f["initiator_network_id"] = f["from"]
+
+        port = f.get("port")
+        try:
+            port = int(port) if port is not None else None
+        except (TypeError, ValueError):
+            port = None
+        f["port"] = port if port is not None and 1 <= port <= 65535 else None
+
+        f["source_methods"] = _norm_methods(f.get("source_methods"))
+        f["target_methods"] = _norm_methods(f.get("target_methods"))
+
+        # A подписывает PUSH как «автоматически при поступлении» только при
+        # trigger=arrival. Поступление по факту есть лишь у USB-потока;
+        # для сетевой ручной передачи подпись — «автоматически».
+        has_usb = any(
+            m.get("mode") == "USB"
+            for m in (f["source_methods"] or []) + (f["target_methods"] or [])
+        )
+        if not has_usb:
+            for m in (f["source_methods"] or []) + (f["target_methods"] or []):
+                if m.get("mode") == "PUSH":
+                    m["trigger"] = None
+
+    # --- люди, передающие файлы вручную/USB (бонусный подсчёт) ---
+    has_manual = any(
+        m.get("mode") in ("manual", "USB")
+        for f in flows
+        for m in (f.get("source_methods") or []) + (f.get("target_methods") or [])
+    )
+    mfu = data.get("manual_file_users")
+    if isinstance(mfu, str):
+        mfu = [mfu]
+    users = [str(x).strip() for x in mfu if str(x).strip()] if isinstance(mfu, list) else []
+    if not users and has_manual and text:
+        low = text.lower()
+        users = [role for role in _MANUAL_ROLES if role in low]
+    data["manual_file_users"] = users or None
+
+    # --- проход 2: проверки, доступ, USB, дефолты ---
+    text_checks = _checks_from_text(text)
+    for f in flows:
+        f["source_checks"] = _norm_checks(f.get("source_checks"))
+        f["target_checks"] = _norm_checks(f.get("target_checks"))
+        if (f["source_checks"] is None) != (f["target_checks"] is None):
+            # проверки заданы для одной стороны — у второй явно «без проверок»
+            if f["source_checks"] is None:
+                f["source_checks"] = []
+            if f["target_checks"] is None:
+                f["target_checks"] = []
+        # Страховка: модель не заполнила проверки, но они есть в тексте.
+        if (
+            f.get("type") == "file"
+            and not f["source_checks"]
+            and not f["target_checks"]
+            and text_checks
+        ):
+            f["source_checks"] = list(text_checks)
+            f["target_checks"] = []
+
+        access = f.get("access_group")
+        f["access_group"] = access.strip() if isinstance(access, str) and access.strip() else None
+        manual_side = any(
+            m.get("mode") in ("manual", "USB")
+            for m in (f["source_methods"] or []) + (f["target_methods"] or [])
+        )
+        if f.get("type") == "file" and f["access_group"] is None:
+            if len(users) == 1 or (not manual_side and not users):
+                f["access_group"] = "shared"
+
+        # USB есть только на Узле А (обращён к открытой сети).
+        if open_id and closed_id:
+            src_usb = any(m.get("mode") == "USB" for m in (f["source_methods"] or []))
+            tgt_usb = any(m.get("mode") == "USB" for m in (f["target_methods"] or []))
+            if src_usb:
+                f["from"], f["to"] = open_id, closed_id
+            elif tgt_usb:
+                f["from"], f["to"] = closed_id, open_id
+
+        f.setdefault("recipient", None)
+        f.setdefault("application_protocol", None)
+        reverse = f.get("reverse_forbidden")
+        f["reverse_forbidden"] = reverse if isinstance(reverse, bool) else None
+        f.setdefault("checks", [])
+        f.setdefault("method_open", None)
+        f.setdefault("method_closed", None)
+
+    # Поток внутри одной сети бессмыслен — выбрасываем.
+    data["flows"] = [
+        f
+        for f in flows
+        if not (f.get("from") is not None and f.get("from") == f.get("to"))
+    ]
+
+    # Потребности для разработчика продукта.
+    rfv = data.get("requests_for_vendor")
+    if isinstance(rfv, str):
+        rfv = [rfv]
+    data["requests_for_vendor"] = (
+        [str(x).strip() for x in rfv if str(x).strip()] if isinstance(rfv, list) else []
+    )
 
 
 def extract(
@@ -162,11 +427,12 @@ def extract(
             data.setdefault("flows", [])
             data.setdefault("unknowns", [])
             data.setdefault("assumptions", [])
-            _normalize_flows(data)
+            _normalize_flows(data, text)
             return data
         except Exception as exc:  # noqa: BLE001
             # Падение LLM не должно ронять сессию — отдаём фолбэк, НО явно помечаем.
             data = quick_extract(text)
+            _normalize_flows(data, text)
             data["_fallback"] = True
             data["_warning"] = (
                 f"LLM-извлечение не удалось ({type(exc).__name__}: {str(exc)[:200]}). "
@@ -174,4 +440,7 @@ def extract(
             )
             logger.warning("extract fallback: %s", data["_warning"])
             return data
-    return quick_extract(text)
+
+    data = quick_extract(text)
+    _normalize_flows(data, text)
+    return data

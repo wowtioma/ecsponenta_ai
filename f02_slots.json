@@ -2,7 +2,7 @@
   "networks": [
     {
       "id": "closed",
-      "name": "Сеть насосной станции водоканала",
+      "name": "Насосная станция водоканала",
       "trust": "closed"
     },
     {
@@ -19,9 +19,16 @@
       "mode": "two-way",
       "protocol": "Modbus TCP",
       "port": 502,
-      "description": "Опрос контроллера",
+      "application_protocol": null,
+      "description": "Опрашивает контроллер насосов",
       "recipient": "Контроллер насосов",
       "initiator_network_id": "open",
+      "reverse_forbidden": null,
+      "source_methods": null,
+      "target_methods": null,
+      "source_checks": null,
+      "target_checks": null,
+      "access_group": null,
       "checks": [],
       "method_open": null,
       "method_closed": null
@@ -33,9 +40,16 @@
       "mode": "one-way",
       "protocol": "UDP",
       "port": 514,
-      "description": "Журналы на сервер",
+      "application_protocol": null,
+      "description": "Журналы на сервер мониторинга",
       "recipient": "Сервер мониторинга",
       "initiator_network_id": "closed",
+      "reverse_forbidden": true,
+      "source_methods": null,
+      "target_methods": null,
+      "source_checks": null,
+      "target_checks": null,
+      "access_group": null,
       "checks": [],
       "method_open": null,
       "method_closed": null
@@ -47,14 +61,23 @@
       "mode": "one-way",
       "protocol": "UDP",
       "port": 123,
-      "description": "Передача времени NTP",
+      "application_protocol": "NTP",
+      "description": "Передаёт точное время",
       "recipient": "Сервер времени станции",
       "initiator_network_id": "open",
+      "reverse_forbidden": null,
+      "source_methods": null,
+      "target_methods": null,
+      "source_checks": null,
+      "target_checks": null,
+      "access_group": null,
       "checks": [],
       "method_open": null,
       "method_closed": null
     }
   ],
+  "manual_file_users": null,
+  "requests_for_vendor": [],
   "unknowns": [],
   "assumptions": []
 }
