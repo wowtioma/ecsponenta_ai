@@ -1,10 +1,22 @@
-
+import type { CSSProperties } from "react";
 import Chat from "./components/Chat";
+import PanelSplitter from "./components/PanelSplitter";
 import ResultPanel from "./components/ResultPanel";
+import ThemeToggle from "./components/ThemeToggle";
 import { useStore } from "./store";
+import { usePanelWidth } from "./usePanelWidth";
 
 export default function App() {
   const { timings, reset } = useStore();
+
+  const {
+    width,
+    collapsed,
+    setWidth,
+    adjust,
+    resetWidth,
+    toggleCollapsed,
+  } = usePanelWidth();
 
   const last = timings.length
     ? timings[timings.length - 1] / 1000
@@ -24,9 +36,21 @@ export default function App() {
             className="app-header__logo"
           />
 
-          <span className="app-header__title">
-            ИИ-ассистент по размещению «Синоникса»
-          </span>
+          <div className="app-header__titles">
+            <span className="app-header__title">
+              <span className="app-header__title-full">
+                ИИ-ассистент по размещению «Синоникса»
+              </span>
+
+              <span className="app-header__title-short">
+                ИИ-ассистент «Синоникс»
+              </span>
+            </span>
+
+            <span className="app-header__subtitle">
+              Расчёт правил обмена между двумя сетями
+            </span>
+          </div>
         </div>
 
         <div className="app-header__right">
@@ -36,22 +60,45 @@ export default function App() {
             </span>
           )}
 
+          <ThemeToggle />
+
           <button
             type="button"
             onClick={reset}
-            className="app-button-outline px-4 py-2 text-sm"
+            className="app-button app-button-outline app-button-sm"
           >
             Новая сессия
           </button>
         </div>
       </header>
 
-      <main className="app-main">
-        <section className="app-chat-section">
+      <main
+        className="app-main"
+        style={
+          { "--result-width": `${width}px` } as CSSProperties
+        }
+      >
+        <section className="app-chat-section" aria-label="Чат с ассистентом">
           <Chat />
         </section>
 
-        <section className="app-result-section">
+        <PanelSplitter
+          width={width}
+          collapsed={collapsed}
+          onResize={setWidth}
+          onStep={adjust}
+          onToggleCollapsed={toggleCollapsed}
+          onReset={resetWidth}
+        />
+
+        <section
+          className={
+            collapsed
+              ? "app-result-section is-collapsed"
+              : "app-result-section"
+          }
+          aria-label="Результат расчёта"
+        >
           <ResultPanel />
         </section>
       </main>

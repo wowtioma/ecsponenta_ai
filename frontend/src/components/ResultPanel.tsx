@@ -17,15 +17,11 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "diagram", label: "Схема" },
 ];
 
-const STATUS_CLS: Record<Result["status"], string> = {
-  needs_clarification:
-    "border-orange-500 bg-orange-500/15 text-orange-300",
-  preliminary:
-    "border-amber-500 bg-amber-500/15 text-amber-300",
-  completed:
-    "border-emerald-500 bg-emerald-500/15 text-emerald-300",
-  unsupported:
-    "border-red-500 bg-red-500/15 text-red-300",
+const STATUS_CLASS: Record<Result["status"], string> = {
+  needs_clarification: "app-badge app-badge--progress",
+  preliminary: "app-badge app-badge--warning",
+  completed: "app-badge app-badge--success",
+  unsupported: "app-badge app-badge--error",
 };
 
 function statusText(status: Result["status"]): string {
@@ -51,12 +47,10 @@ function List({
   if (items.length === 0) return null;
 
   return (
-    <div className="mt-4">
-      <div className="mb-1 text-xs font-medium text-zinc-400">
-        {title}
-      </div>
+    <div className="app-note">
+      <div className="app-note__title">{title}</div>
 
-      <ul className="list-disc space-y-1 pl-5 text-sm text-zinc-300">
+      <ul className="app-note__list">
         {items.map((item, index) => (
           <li key={`${index}-${item}`}>{item}</li>
         ))}
@@ -78,14 +72,14 @@ export default function ResultPanel() {
   // Пока первый запрос выполняется и результата ещё нет
   if (!result && loading) {
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
-        <span className="rounded-full border border-sky-500 bg-sky-500/15 px-3 py-1 text-xs font-medium text-sky-300">
-          Обновляется
-        </span>
+      <div className="app-result">
+        <div className="app-empty">
+          <span className="app-badge app-badge--muted app-badge--pulse">
+            Обновляется
+          </span>
 
-        <p className="text-sm text-zinc-400">
-          Анализирую данные и формирую результат…
-        </p>
+          <p>Анализирую данные и формирую результат…</p>
+        </div>
       </div>
     );
   }
@@ -93,65 +87,64 @@ export default function ResultPanel() {
   // Если результата пока нет и запрос не выполняется
   if (!result) {
     return (
-      <div className="flex h-full items-center justify-center p-6 text-center text-sm text-zinc-500">
-        Результат появится здесь после описания сетей в чате
+      <div className="app-result">
+        <div className="app-empty">
+          <div className="app-empty__mark" aria-hidden="true">
+            ◫
+          </div>
+
+          <p>
+            Результат появится здесь после описания сетей в чате
+          </p>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className="app-result">
       {/* Статус и основные показатели */}
-      <div className="space-y-3 border-b border-zinc-800 p-3">
-        <div className="flex flex-wrap items-center gap-2">
+      <div className="app-result__head">
+        <div className="app-result__statusrow">
           {loading ? (
-            <span className="rounded-full border border-sky-500 bg-sky-500/15 px-3 py-1 text-xs font-medium text-sky-300">
+            <span className="app-badge app-badge--muted app-badge--pulse">
               Обновляется…
             </span>
           ) : (
-            <span
-              className={`rounded-full border px-3 py-1 text-xs font-medium ${
-                STATUS_CLS[result.status]
-              }`}
-            >
+            <span className={STATUS_CLASS[result.status]}>
               {statusText(result.status)}
             </span>
           )}
 
           {resultIsStale && (
-            <span className="text-xs text-amber-300">
+            <span className="app-stale">
               Показан предыдущий результат
             </span>
           )}
         </div>
 
         {/* Основные показатели */}
-        <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-zinc-400">
-          <span>
-            Правил:{" "}
-            <b className="text-zinc-200">
-              {result.rules_count}
-            </b>
+        <div className="app-result__metrics">
+          <span className="app-metric">
+            Правил: <b>{result.rules_count}</b>
           </span>
 
-          <span>
+          <span className="app-metric">
             Пользователей файловой передачи:{" "}
-            <b className="text-zinc-200">
-              {fileUsersLabel(result)}
-            </b>
+            <b>{fileUsersLabel(result)}</b>
           </span>
         </div>
 
         {/* Пояснение при обновлении или сохранении старого результата */}
         {loading && (
-          <p className="text-xs text-sky-300">
+          <p className="app-hint">
             Выполняется новый запрос. Пока отображается предыдущая
             конфигурация, она ещё не подтверждена новым ответом.
           </p>
         )}
 
         {!loading && resultIsStale && (
-          <p className="text-xs text-amber-300">
+          <p className="app-hint app-hint--warning">
             Последний запрос не вернул новую конфигурацию.
             Ниже показан последний рассчитанный результат.
           </p>
@@ -159,13 +152,13 @@ export default function ResultPanel() {
 
         {/* Дополнительные пояснения по статусам */}
         {!loading && result.status === "needs_clarification" && (
-          <p className="text-xs text-orange-300">
+          <p className="app-hint">
             Проект ещё не готов: ответьте на вопросы ассистента в чате.
           </p>
         )}
 
         {!loading && result.status === "unsupported" && (
-          <p className="text-xs text-red-300">
+          <p className="app-hint app-hint--warning">
             Запрос выходит за границы поддерживаемого.
             Подробности приведены во вкладке «Объяснение».
           </p>
@@ -185,15 +178,16 @@ export default function ResultPanel() {
       </div>
 
       {/* Вкладки */}
-      <div className="flex gap-1 border-b border-zinc-800 px-3 pt-2">
+      <div className="app-tabs" role="tablist" aria-label="Разделы результата">
         {TABS.map((item) => (
           <button
             key={item.id}
+            type="button"
+            role="tab"
+            aria-selected={tab === item.id}
             onClick={() => setTab(item.id)}
-            className={`rounded-t-lg px-3 py-1.5 text-sm ${
-              tab === item.id
-                ? "border-b-2 border-sky-500 text-white"
-                : "text-zinc-400 hover:text-zinc-200"
+            className={`app-tab${
+              tab === item.id ? " app-tab--active" : ""
             }`}
           >
             {item.label}
@@ -203,20 +197,23 @@ export default function ResultPanel() {
 
       {/* Содержимое вкладок */}
       <div
-        className={`min-h-0 flex-1 overflow-auto ${
-          loading || resultIsStale ? "opacity-60" : ""
+        className={`app-result__body${
+          loading || resultIsStale
+            ? " app-result__body--stale"
+            : ""
         }`}
+        role="tabpanel"
       >
         {tab === "explanation" && (
-          <div className="p-4 text-sm">
+          <div className="app-result__pane">
             {explanation ? (
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                {explanation}
-              </ReactMarkdown>
+              <div className="app-markdown">
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                  {explanation}
+                </ReactMarkdown>
+              </div>
             ) : (
-              <p className="text-zinc-500">
-                Объяснение пока недоступно.
-              </p>
+              <p className="app-hint">Объяснение пока недоступно.</p>
             )}
 
             <List
@@ -234,11 +231,13 @@ export default function ResultPanel() {
         )}
 
         {tab === "rules" && (
-          <RulesTable result={result} />
+          <div className="app-result__pane">
+            <RulesTable result={result} />
+          </div>
         )}
 
         {tab === "diagram" && (
-          <div className="h-full overflow-auto p-3">
+          <div className="app-result__pane app-result__pane--diagram">
             <DiagramExport result={result} />
             <DiagramPreview result={result} />
           </div>

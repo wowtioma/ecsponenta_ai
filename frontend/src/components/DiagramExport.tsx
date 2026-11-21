@@ -12,19 +12,11 @@ export default function DiagramExport({
   result,
 }: DiagramExportProps) {
   return (
-    <div className="flex items-center justify-end gap-2 mb-3">
+    <div className="diagram-export">
       <button
         type="button"
         onClick={() => exportJson(result)}
-        className="
-          rounded-lg
-          border border-zinc-700
-          px-3 py-2
-          text-xs font-medium
-          text-zinc-300
-          hover:bg-zinc-800
-          transition-colors
-        "
+        className="app-button app-button-outline app-button-sm"
       >
         JSON для эксперта
       </button>
@@ -32,15 +24,7 @@ export default function DiagramExport({
       <button
         type="button"
         onClick={() => exportDrawio(result)}
-        className="
-          rounded-lg
-          bg-blue-600
-          px-3 py-2
-          text-xs font-medium
-          text-white
-          hover:bg-blue-500
-          transition-colors
-        "
+        className="app-button app-button-primary app-button-sm"
       >
         Скачать .drawio
       </button>
