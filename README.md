@@ -14,17 +14,33 @@
 
 Для прогона нужны Python 3.10+, Node.js, исходный ZIP организаторов и ключ Groq.
 В корне создайте локальный файл `.env` со строками `LLM_PROVIDER=groq`,
-`GROQ_MODEL=openai/gpt-oss-20b` и `GROQ_API_KEY=<ваш ключ>`.
+`GROQ_MODEL=openai/gpt-oss-120b` и `GROQ_API_KEY=<ваш ключ>`.
 Ключ и ZIP хранятся локально.
+
+**Важно про базу знаний.** Папка `Кейс АйТи Бастион — Синоникс/` не входит
+в репозиторий (она в `.gitignore`), а RAG ищет `synonyx_base/*.md` в ней.
+На чистом клоне укажите путь явно — в `.env` или переменной окружения:
+
+```powershell
+$env:SYNONYX_BASE_DIR = 'C:\путь\к\Кейс АйТи Бастион — Синоникс\synonyx_base'
+```
+
+Без этого сервер завершится с понятной ошибкой, а тесты `tests/test_rag.py`
+упадут на пустой базе. Если архив организаторов распакован, `SYNONYX_BASE_DIR`
+можно не задавать: сервер возьмёт `synonyx_base/*.md` прямо из ZIP.
 
 В первом PowerShell запустите API из корня проекта:
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt 'pydantic>=2,<3'
+$env:SYNONYX_BASE_DIR = 'C:\путь\к\Кейс АйТи Бастион — Синоникс\synonyx_base'
 $env:SYNONYX_CASE_ZIP = 'C:\путь\к\архиву.zip'
 .\.venv\Scripts\python.exe integration_test_server.py
 ```
+
+`SYNONYX_CASE_ZIP` нужен, только если `SYNONYX_BASE_DIR` не задан. Тесты:
+`.\.venv\Scripts\python.exe -m unittest discover -s tests`.
 
 Во втором PowerShell запустите интерфейс из корня той же копии:
 
