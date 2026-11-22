@@ -21,3 +21,19 @@ _checkA/
 Кейс _ АйТиБастион.docx
 Примеры эксплуатационных сценариев.docx
 Синоникс — кейс АйТи Бастион _ НЭТИ-НЕКСТ 2.0.pptx
+
+# Защита: черновики презентации и речи (не проектные файлы)
+Экспонента*.pptx
+Речь_на_*.md
+Речь_на_*.docx
+make_speech_*.py
+_*.py
+_*.pptx
+_*.png
+_slides/
+_integration_wt/
+_preview/
+
+# Node
+node_modules/
+frontend/dist/
