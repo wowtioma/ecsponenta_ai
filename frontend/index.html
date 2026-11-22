@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="ru" data-theme="light">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/png" href="/logo_shield.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#FFFFFF" />
+    <title>Экспонента · Синоникс — ИИ-ассистент</title>
+    <script>
+      // Тема применяется до первой отрисовки, чтобы не было вспышки
+      (function () {
+        try {
+          var stored = localStorage.getItem("synonyx:theme");
+          var mode =
+            stored === "dark" || stored === "light"
+              ? stored
+              : window.matchMedia("(prefers-color-scheme: dark)").matches
+                ? "dark"
+                : "light";
+
+          document.documentElement.dataset.theme = mode;
+          document.documentElement.style.colorScheme = mode;
+
+          var meta = document.querySelector('meta[name="theme-color"]');
+          if (meta) {
+            meta.setAttribute("content", mode === "dark" ? "#070707" : "#FFFFFF");
+          }
+        } catch (error) {
+          /* приватный режим */
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
