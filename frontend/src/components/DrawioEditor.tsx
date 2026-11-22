@@ -42,6 +42,11 @@ export default function DrawioEditor({
 
     if (missing.length === 0) return stored;
 
+    // Совсем пустой документ (только корневые ячейки) — берём эталон.
+    const cellCount = (stored.match(/<mxCell\b/g) ?? []).length;
+
+    if (cellCount <= 2) return canonicalXml;
+
     const repaired = restoreCoreCells(stored, canonicalXml, missing);
 
     // Если восстановить не удалось (в сохранённом XML нет даже <root>),

@@ -59,11 +59,30 @@ export function restoreCoreCells(
 
   if (cells.length === 0) return xml;
 
+  const insertAt = cellsInsertIndex(xml);
+
+  if (insertAt === -1) return xml;
+
+  // Вставляем ПОСЛЕ корневых ячеек id="0"/id="1": draw.io декодирует
+  // документ по порядку, и ячейка не должна ссылаться на parent="1"
+  // раньше, чем появится сама ячейка "1".
+  return `${xml.slice(0, insertAt)}\n${cells.join("\n")}${xml.slice(insertAt)}`;
+}
+
+function cellsInsertIndex(xml: string): number {
   const rootOpen = xml.indexOf("<root>");
 
-  if (rootOpen === -1) return xml;
+  if (rootOpen === -1) return -1;
 
-  const insertAt = rootOpen + "<root>".length;
+  const baseCell = /<mxCell\b[^>]*\bid="1"[^>]*\/>/.exec(xml);
 
-  return `${xml.slice(0, insertAt)}\n${cells.join("\n")}\n${xml.slice(insertAt)}`;
+  if (baseCell) return baseCell.index + baseCell[0].length;
+
+  const firstCell = /<mxCell\b[^>]*>/.exec(xml.slice(rootOpen));
+
+  if (firstCell) {
+    return rootOpen + firstCell.index + firstCell[0].length;
+  }
+
+  return rootOpen + "<root>".length;
 }
