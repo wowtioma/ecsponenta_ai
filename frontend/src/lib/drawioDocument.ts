@@ -64,6 +64,19 @@ export function clearStoredDrawioXml(key: string): void {
   }
 }
 
+/** Полная очистка правок схем — вызывается при старте новой сессии. */
+export function clearAllDrawioDocuments(): void {
+  try {
+    const keys = Object.keys(localStorage).filter((key) =>
+      key.startsWith(STORAGE_PREFIX),
+    );
+
+    keys.forEach((key) => localStorage.removeItem(key));
+  } catch {
+    // Приватный режим браузера может запрещать localStorage
+  }
+}
+
 /** Исходное содержимое редактора: сохранённые правки или свежая схема. */
 export function loadDrawioDocument(result: Result, key: string): string {
   return readStoredDrawioXml(key) ?? buildDrawioXml(result);

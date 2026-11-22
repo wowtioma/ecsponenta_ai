@@ -1,7 +1,9 @@
+// dsh-skip-func-length: Единый фабричный стор zustand (create с набором действий) — существующая структура; в этой правке добавлен только вызов очистки схем при сбросе сессии, полное разбиение стора — отдельная задача
 
 import { create } from "zustand";
 import type { Message, Result } from "./types";
 import { askAi, resetSession } from "./api";
+import { clearAllDrawioDocuments } from "./lib/drawioDocument";
 import {
   EMPTY_USAGE,
   mergeUsage,
@@ -177,6 +179,10 @@ export const useStore = create<State>((set, get) => {
       activeRequest++;
 
       resetSession();
+
+      // Новая сессия — чистая схема: убираем сохранённые правки,
+      // привязанные к конфигурациям прошлой сессии.
+      clearAllDrawioDocuments();
 
       set({
         messages: [],

@@ -14,6 +14,7 @@ import {
 } from "../lib/drawioDocument";
 import {
   missingCoreCells,
+  resolveInitialXml,
   restoreCoreCells,
 } from "../lib/drawioGuards";
 import DiagramPreview from "./DiagramPreview";
@@ -36,23 +37,9 @@ export default function DrawioEditor({
 }) {
   const canonicalXml = useMemo(() => buildDrawioXml(result), [result]);
 
-  const [xml, setXml] = useState(() => {
-    const stored = loadDrawioDocument(result, documentKey);
-    const missing = missingCoreCells(stored);
-
-    if (missing.length === 0) return stored;
-
-    // Совсем пустой документ (только корневые ячейки) — берём эталон.
-    const cellCount = (stored.match(/<mxCell\b/g) ?? []).length;
-
-    if (cellCount <= 2) return canonicalXml;
-
-    const repaired = restoreCoreCells(stored, canonicalXml, missing);
-
-    // Если восстановить не удалось (в сохранённом XML нет даже <root>),
-    // показываем эталонную схему — пустой холст хуже потери правок.
-    return missingCoreCells(repaired).length === 0 ? repaired : canonicalXml;
-  });
+  const [xml, setXml] = useState(() =>
+    resolveInitialXml(loadDrawioDocument(result, documentKey), canonicalXml),
+  );
   const [svg, setSvg] = useState<{ url: string; xml: string; frame: string }>();
   const [status, setStatus] = useState<EditorStatus>("loading");
   const [expanded, setExpanded] = useState(false);

@@ -42,6 +42,44 @@ export function missingCoreCells(xml: string): string[] {
   return CORE_CELL_IDS.filter((id) => !xml.includes(`id="${id}"`));
 }
 
+/** В документе остались только корневые и закреплённые ячейки (без сети и МЭ). */
+export function hasOnlyCoreCells(xml: string): boolean {
+  const ids = [...xml.matchAll(/<mxCell\b[^>]*\bid="([^"]+)"/g)].map(
+    (match) => match[1],
+  );
+
+  if (ids.length === 0) return true;
+
+  return ids.every(
+    (id) =>
+      id === "0" ||
+      id === "1" ||
+      (CORE_CELL_IDS as readonly string[]).includes(id),
+  );
+}
+
+/**
+ * Что показать при открытии редактора:
+ * - нормальную сохранённую схему — как есть;
+ * - схему без закреплённых блоков — восстановить блоки;
+ * - пустой/битый документ (только корневые ячейки или только блоки
+ *   «Синоникса») — эталонную схему по расчёту.
+ */
+export function resolveInitialXml(stored: string, canonical: string): string {
+  if (stored.trim().length === 0) return canonical;
+
+  const missing = missingCoreCells(stored);
+  const cellCount = (stored.match(/<mxCell\b/g) ?? []).length;
+
+  if (missing.length === 0 && !hasOnlyCoreCells(stored)) return stored;
+
+  if (cellCount <= 2 || hasOnlyCoreCells(stored)) return canonical;
+
+  const repaired = restoreCoreCells(stored, canonical, missing);
+
+  return missingCoreCells(repaired).length === 0 ? repaired : canonical;
+}
+
 /**
  * Возвращает XML, в который добавлены пропавшие ячейки из эталонного XML.
  * Вставляем в начало <root>, чтобы блок «Синоникс» остался позади узлов.
