@@ -51,6 +51,13 @@ SYSTEM_EXTRACT = (
     "- source_methods — способы стороны from, target_methods — способы стороны to. Протокол (SFTP/FTP/SMB) бери из текста той стороны.\n"
     "- USB-поток: from — открытая сеть (к ней обращён Узел А), to — закрытая. USB только на Узле А.\n"
     "- Не создавай поток, у которого from = to: передача всегда между двумя разными сетями.\n"
+    "- Один описанный файловый поток — один элемент flows. Не создавай обратный поток (to → from), "
+    "если в тексте нет явных слов «обратно», «в обе стороны», «двунаправленно», «туда и обратно».\n"
+    "- Если способы передачи названы, source_methods/target_methods НЕЛЬЗЯ оставлять null: "
+    "«вручную по SFTP» → source_methods [{mode:\"manual\", protocol:\"SFTP\"}]; "
+    "«автоматически доставляет в хранилище по SMB/PUSH» → target_methods "
+    "[{mode:\"PUSH\", protocol:\"SMB\", trigger:\"arrival\"}].\n"
+    "- Для файлов recipient — куда попадают файлы («хранилище», «папка»), а не название сети.\n"
     "- Отвечай СТРОГО одним JSON-объектом, без обёрток, без markdown, без пояснений вокруг.\n\n"
     "Пример входа:\n"
     "\"Насосная станция — закрытая сеть. Диспетчер в общей сети опрашивает контроллер по Modbus TCP 502. Оператор станции шлёт журналы на сервер общей сети по UDP 514, обратно ничего. Сервер общей сети передаёт время станции по NTP, UDP 123.\"\n"
@@ -60,6 +67,20 @@ SYSTEM_EXTRACT = (
     '{"type":"data","from":"closed","to":"open","mode":"one-way","protocol":"UDP","port":514,"application_protocol":null,"description":"Журналы на сервер","recipient":"Сервер журналов","initiator_network_id":"closed","reverse_forbidden":true,"source_methods":null,"target_methods":null,"source_checks":null,"target_checks":null,"access_group":null,"checks":[],"method_open":null,"method_closed":null},'
     '{"type":"data","from":"open","to":"closed","mode":"one-way","protocol":"UDP","port":123,"application_protocol":"NTP","description":"NTP время","recipient":"Сервер времени станции","initiator_network_id":"open","reverse_forbidden":null,"source_methods":null,"target_methods":null,"source_checks":null,"target_checks":null,"access_group":null,"checks":[],"method_open":null,"method_closed":null}],'
     '"manual_file_users":null,"requests_for_vendor":[],"unknowns":[],"assumptions":[]}'
+    "\n\nПример файлового потока:\n"
+    "\"Инженер офиса вручную передаёт файлы по SFTP в закрытый сегмент цеха; там устройство "
+    "автоматически доставляет их в хранилище по SMB/PUSH. Требуются маска имени, проверка размера "
+    "и внешний антивирус по ICAP. Разных групп доступа нет.\"\n"
+    "Пример выхода для файлового потока:\n"
+    '{"networks":[{"id":"open","name":"Офис","trust":"open"},{"id":"closed","name":"Цех","trust":"closed"}],'
+    '"flows":[{"type":"file","from":"open","to":"closed","mode":"one-way","protocol":null,"port":null,'
+    '"application_protocol":null,"description":"Файлы из офиса в цех","recipient":"хранилище",'
+    '"initiator_network_id":"open","reverse_forbidden":null,'
+    '"source_methods":[{"mode":"manual","protocol":"SFTP","storage":null,"trigger":null}],'
+    '"target_methods":[{"mode":"PUSH","protocol":"SMB","storage":"хранилище","trigger":"arrival"}],'
+    '"source_checks":["маска имени","размер","ICAP: внешний антивирус"],"target_checks":[],'
+    '"access_group":"shared","checks":[],"method_open":null,"method_closed":null}],'
+    '"manual_file_users":["инженер"],"requests_for_vendor":[],"unknowns":[],"assumptions":[]}'
 )
 
 # Генерация человеческого ответа на основе найденных фактов базы знаний.

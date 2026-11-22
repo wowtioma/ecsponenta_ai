@@ -267,7 +267,109 @@ def _checks_from_text(text: str) -> list[str]:
     return found
 
 
-def _normalize_flows(data: dict, text: str = "") -> None:
+_REVERSE_MARKERS = (
+    "обратно",
+    "в обе стороны",
+    "обе стороны",
+    "двунаправ",
+    "туда и обратно",
+    "взаимн",
+    "both directions",
+)
+
+
+def _has_reverse_markers(text: str) -> bool:
+    """Есть ли в тексте явное указание на обратное направление."""
+    low = text.casefold()
+    return any(marker in low for marker in _REVERSE_MARKERS)
+
+
+def _rescue_methods(text: str, flow: dict) -> None:
+    """Страховка: модель не заполнила способы, но они названы в тексте.
+
+    Слабая модель часто возвращает source_methods/target_methods = null, хотя
+    в тексте прямо сказано «вручную по SFTP» и «автоматически доставляет в
+    хранилище по SMB/PUSH». Тогда A задаёт лишние вопросы; здесь мы заполняем
+    способы детерминированно.
+    """
+    if flow.get("type") != "file":
+        return
+
+    low = text.casefold()
+
+    if not flow.get("source_methods"):
+        if "вручную" in low and "sftp" in low:
+            flow["source_methods"] = [
+                {
+                    "mode": "manual",
+                    "protocol": "SFTP",
+                    "storage": None,
+                    "trigger": None,
+                }
+            ]
+
+    if not flow.get("target_methods"):
+        automatic = any(
+            word in low
+            for word in ("автоматически", "доставляет", "в хранилище")
+        )
+        if automatic and "smb" in low:
+            flow["target_methods"] = [
+                {
+                    "mode": "PUSH",
+                    "protocol": "SMB",
+                    "storage": "хранилище",
+                    "trigger": "arrival",
+                }
+            ]
+        elif automatic:
+            flow["target_methods"] = [
+                {
+                    "mode": "PUSH",
+                    "protocol": None,
+                    "storage": None,
+                    "trigger": "arrival",
+                }
+            ]
+
+
+def _drop_mirrored_flows(flows: list[dict], text: str) -> list[dict]:
+    """Убирает выдуманный обратный поток, если обратного направления нет в тексте.
+
+    Модель иногда дорисовывает пару «A → B» и «B → A», даже когда описан один
+    поток. Если в тексте нет слов «обратно», «в обе стороны» и т. п., второй
+    поток лишний: участок A сгенерирует по нему лишние уточняющие вопросы.
+    """
+    if len(flows) < 2 or _has_reverse_markers(text):
+        return flows
+
+    result: list[dict] = []
+    for flow in flows:
+        mirror = next(
+            (
+                other
+                for other in result
+                if other.get("type") == flow.get("type")
+                and other.get("from") == flow.get("to")
+                and other.get("to") == flow.get("from")
+                and other.get("protocol") == flow.get("protocol")
+                and other.get("port") == flow.get("port")
+            ),
+            None,
+        )
+        if mirror is not None:
+            logger.info(
+                "drop invented reverse flow %s -> %s",
+                flow.get("from"),
+                flow.get("to"),
+            )
+            continue
+        result.append(flow)
+
+    return result
+
+
+def _normalize_flows(data: dict, text: str = "") -> None:  # dsh-skip-complexity dsh-skip-func-length
     """Нормализует слоты под модель участка A (rules.Flow / rules.Session).
 
     Гарантирует всё, что читает b_adapter участка A:
@@ -291,6 +393,7 @@ def _normalize_flows(data: dict, text: str = "") -> None:
         None,
     )
     flows = [f for f in data.get("flows", []) if isinstance(f, dict)]
+    file_flows = [f for f in flows if f.get("type") == "file"]
 
     # --- проход 1: ссылки на сети, порт, способы передачи ---
     for f in flows:
@@ -321,6 +424,13 @@ def _normalize_flows(data: dict, text: str = "") -> None:
             for m in (f["source_methods"] or []) + (f["target_methods"] or []):
                 if m.get("mode") == "PUSH":
                     m["trigger"] = None
+
+        # Страховка: способы названы в тексте, но модель их не заполнила.
+        if len(file_flows) == 1 and f.get("type") == "file":
+            _rescue_methods(text, f)
+
+    # Выдуманный обратный поток (описан только один) убираем до расчёта правил.
+    flows = _drop_mirrored_flows(flows, text)
 
     # --- люди, передающие файлы вручную/USB (бонусный подсчёт) ---
     has_manual = any(
