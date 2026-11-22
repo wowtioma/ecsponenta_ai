@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Result } from "../types";
 import { buildDrawioXml, downloadDrawioXml } from "../lib/exportDrawio";
 import {
@@ -12,6 +12,7 @@ import {
   loadDrawioDocument,
   storeDrawioXml,
 } from "../lib/drawioDocument";
+import { guardCoreCells } from "../lib/drawioGuards";
 import DiagramPreview from "./DiagramPreview";
 
 type EditorStatus = "loading" | "ready" | "unavailable";
@@ -30,11 +31,16 @@ export default function DrawioEditor({
   preview: boolean;
   onPreview: () => void;
 }) {
-  const [xml, setXml] = useState(() => loadDrawioDocument(result, documentKey));
+  const canonicalXml = useMemo(() => buildDrawioXml(result), [result]);
+
+  const [xml, setXml] = useState(() =>
+    guardCoreCells(loadDrawioDocument(result, documentKey), canonicalXml),
+  );
   const [svg, setSvg] = useState<{ url: string; xml: string; frame: string }>();
   const [status, setStatus] = useState<EditorStatus>("loading");
   const [expanded, setExpanded] = useState(false);
   const [attempt, setAttempt] = useState(0);
+  const [notice, setNotice] = useState<string | null>(null);
   const [dark, setDark] = useState(
     () => document.documentElement.dataset.theme === "dark",
   );
@@ -92,10 +98,17 @@ export default function DrawioEditor({
           const next = decodeDrawioXml(message.xml);
           if (!next || next === xmlRef.current) break;
 
+          const fixed = guardCoreCells(next, canonicalXml);
           exportId.current += 1;
-          xmlRef.current = next;
-          setXml(next);
-          storeDrawioXml(documentKey, next);
+          xmlRef.current = fixed;
+          setXml(fixed);
+          storeDrawioXml(documentKey, fixed);
+          if (fixed !== next) {
+            setNotice(
+              "Закреплённый блок «Синоникс» восстановлен.",
+            );
+            load(fixed);
+          }
           break;
         }
         case "export":
@@ -111,7 +124,7 @@ export default function DrawioEditor({
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [documentKey, frameKey, load, origin]);
+  }, [canonicalXml, documentKey, frameKey, load, origin]);
 
   useEffect(() => {
     if (!preview || status !== "ready") return;
@@ -125,6 +138,18 @@ export default function DrawioEditor({
     return () => window.clearTimeout(timer);
   }, [frameKey, status]);
 
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(null), 6000);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
+
+  // Если в сохранённой схеме не было закреплённых блоков, фиксируем
+  // восстановленный вариант, чтобы пустой холст не вернулся после F5.
+  useEffect(() => {
+    storeDrawioXml(documentKey, xmlRef.current);
+  }, [documentKey]);
+
   const isExpanded = expanded && !preview;
   useEffect(() => {
     if (!isExpanded) return;
@@ -136,7 +161,7 @@ export default function DrawioEditor({
   }, [isExpanded]);
 
   const reset = () => {
-    const generated = buildDrawioXml(result);
+    const generated = canonicalXml;
     exportId.current += 1;
     xmlRef.current = generated;
     setXml(generated);
@@ -188,6 +213,12 @@ export default function DrawioEditor({
           </div>
         </div>
 
+        {notice && (
+          <div className="drawio-editor__notice" role="status">
+            {notice}
+          </div>
+        )}
+
         <div className="drawio-editor__frame">
           <iframe
             key={frameKey}
@@ -218,8 +249,9 @@ export default function DrawioEditor({
           )}
         </div>
         <div className="diagram-note">
-          Правки сохраняются в этом браузере и входят в файл .drawio.
-          Чтобы изменить расчёт правил, уточните параметры обмена в чате.
+          Блок «Синоникс» закреплён вместе с узлами, ядром и подписями.
+          Остальную схему можно редактировать. Правки сохраняются в браузере
+          и входят в файл .drawio. Правила обмена можно изменить в чате.
         </div>
       </div>
 

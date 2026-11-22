@@ -120,6 +120,14 @@ def _parse_json_lenient(text: str) -> dict:
 
 _METHOD_MODES = {"manual": "manual", "usb": "USB", "pull": "PULL", "push": "PUSH"}
 _FILE_PROTOCOLS = {"SFTP", "FTP", "SMB"}
+RECIPROCAL_FILES = re.compile(
+    r"\bфайл\w*[^.!?;]{0,40}\b(?:в обе стороны|в обоих направлениях)\b"
+    r"|\bдвусторонн\w*\s+(?:файловый обмен|обмен файлами)\b", re.I,
+)
+FILE_METHOD_EVIDENCE = re.compile(
+    r"\b(?:sftp|smb|ftp|usb|pull|push|manual|флеш\w*|носител\w*|вручную|ручн\w*|автомат\w*|"
+    r"расписани\w*|забира\w*|забер\w*|скач\w*|загру\w*|выгру\w*|принос\w*|достав\w*)\b", re.I,
+)
 
 # Канонический словарь проверок (как в бенчмарках и методике).
 _CHECK_CANON = (
@@ -278,6 +286,7 @@ def _checks_from_text(text: str) -> list[str]:
 FILE_REVERSE_BAN = re.compile(
     r"\b(?:файлы\s+(?:обратно\s+)?не\s+переда\w*|обратно\s+файлы\s+не\s+переда\w*|"
     r"обратной\s+(?:файловой\s+передачи|передачи\s+файлов)\s+нет|"
+    r"на\s+флешк\w*\s+ничего\s+не\s+выгружа\w*|"
     r"у\s+файл\w*\s+обратной\s+передачи\s+нет)\b",
     re.I,
 )
@@ -358,6 +367,7 @@ def _normalize_flows(data: dict, text: str = "") -> None:
         None,
     )
     flows = [f for f in data.get("flows", []) if isinstance(f, dict)]
+    directions_only = RECIPROCAL_FILES.search(text) and not FILE_METHOD_EVIDENCE.search(text)
 
     for flow in flows:
         # Firmware and software packages are files even before the delivery method is known.
@@ -374,6 +384,10 @@ def _normalize_flows(data: dict, text: str = "") -> None:
                 f[key] = None
         if f.get("initiator_network_id") is None and f.get("from") in net_ids:
             f["initiator_network_id"] = f["from"]
+        # Two directions say nothing about manual access, USB or automation.
+        if directions_only and f.get("type") == "file":
+            for field in ("source_methods", "target_methods", "method_open", "method_closed"):
+                f[field] = None
 
         port = f.get("port")
         try:
@@ -446,9 +460,13 @@ def _normalize_flows(data: dict, text: str = "") -> None:
         r"оба направления\s+без проверок|(?:^|[.!?;\n]\s*)проверки\s+не требуются(?=$|[.!?;\n])",
         text, re.I,
     ))
+    concrete_checks = text_checks or _NO_FILE_CHECKS.search(text.casefold()) or re.search(r"\bICAP\b", text, re.I)
     for f in flows:
         f["source_checks"] = _norm_checks(f.get("source_checks"))
         f["target_checks"] = _norm_checks(f.get("target_checks"))
+        if f.get("type") == "file" and (directions_only or data["same_file_checks"]) and not concrete_checks:
+            # The user's description gives the scope of the exchange, but no check profile.
+            f["source_checks"] = f["target_checks"] = None
         if f.get("type") == "file" and explicit_no_checks:
             for field in ("source_checks", "target_checks"):
                 if f[field] is None:
@@ -625,6 +643,13 @@ def _complete_explicit_file_methods(flows, networks, text):
     if len(file_flows) == 1:
         _ground_file_destination(file_flows[0], networks, text)
         flow = file_flows[0]
+        incoming_usb = re.search(
+            r"\bпринос\w*[^.!?;]{0,45}\bна\s+флешк\w*|"
+            r"\b(?:с\s+флешк\w*|по\s+USB)\s+(?:загружа\w*|переда\w*)",
+            text, re.I,
+        )
+        if incoming_usb and not re.search(r"\b(?:SFTP|PULL)\b|\bвручную\b", text, re.I):
+            flow["source_methods"] = [{"mode": "USB"}]
         destination = re.search(
             r"\bавтоматически\s+(?:доставля\w*|попада\w*)(?:\s+их)?\s+(?:в|на)\s+"
             r"([^.!?;]{2,95}?)\s+по\s+(SMB|SFTP|FTP)\b",
@@ -649,11 +674,7 @@ def _complete_explicit_file_methods(flows, networks, text):
         r"[^.!?;]{0,240}\b(?:во\s+второе|в\s+другое|в\s+противоположное)\b",
         text, re.I,
     ))
-    reciprocal_intent = symmetric_automation or bool(re.search(
-        r"\bфайл\w*[^.!?;]{0,40}\b(?:в обе стороны|в обоих направлениях)\b"
-        r"|\bдвусторонн\w*\s+(?:файловый обмен|обмен файлами)\b",
-        text, re.I,
-    ))
+    reciprocal_intent = symmetric_automation or bool(RECIPROCAL_FILES.search(text))
     if len(networks) != 2 or not file_flows or not reciprocal_intent:
         return
 

@@ -46,7 +46,7 @@ client: LLMClient | None = None
 MODEL_WORDING_ENABLED = os.environ.get("SYNONYX_LLM_WORDING", "1").strip().lower() not in {"0", "false"}
 
 FACT_QUESTION = re.compile(
-    r'^\s*[«"]?\s*(?:сколько\s+правил\b|'
+    r'^\s*[«"]?\s*(?:что\s+(?:такое|представляет\s+собой)\s+[«"]?синоникс\b|сколько\s+правил\b|'
     r"(?:зачем|почему)\b[^.!?\n]{0,60}\b(?:межсетевой\s+экран|мэ)\b)",
     re.I,
 )
@@ -209,10 +209,20 @@ def apply_question_answers(session, answered, *, explicit):
             session = apply_answer(session, key, "shared")
             if session.manual_file_users is None and "один подрядчик" in normalized:
                 session = session.model_copy(update={"manual_file_users": ["contractor"]})
-        elif key.endswith(".recipient") and normalized.rstrip(".!?") in (
-            "одна", "одна система", "один", "один получатель", "несколько", "несколько систем"
+        elif key.endswith((".recipient", ".source_device")) and re.fullmatch(
+            r"(?:\d+|один|одна|два|две|три|четыре|несколько)(?:\s+(?:систем\w*|получател\w*|сервер\w*))?",
+            normalized,
         ):
-            continue
+            raise FormAnswerError("Укажите имена или назначения систем. Например, «Архив; Сервер мониторинга».")
+        elif key.endswith((".recipient", ".source_device")) and ";" in answer:
+            recipients = {}
+            for part in answer.split(";"):
+                name = part.strip()
+                if name:
+                    recipients.setdefault(name.casefold(), name)
+            if not recipients:
+                raise FormAnswerError("Укажите хотя бы одну принимающую систему.")
+            session = apply_answer(session, key, list(recipients.values()))
         elif key.endswith((".recipient", ".source_device", ".storage")):
             if not explicit and (
                 not is_recipient_reply(answer) or len(normalized.split()) > 8
@@ -276,21 +286,67 @@ def apply_deferred_file_details(session, questions, message):
     """Apply explicitly named storage and headcount in the same reply."""
     ids = {question["id"] for question in questions}
     storage_ids = [key for key in ids if key.endswith(".storage")]
-    known_fields = set(storage_ids) | {"manual_users_count"}
-    if len(storage_ids) != 1 or ids - known_fields:
-        return None
-    storage = re.match(r"\s*хранилище\s*[—–:=]\s*([^.!?\n]+)", message, re.I)
-    if storage is None:
-        return None
-    updated = apply_answer(session, storage_ids[0], storage[1].strip())
+    updated = session
+    storage = re.match(r"\s*хранилище\s*[—–:=]\s*([^.!?;\n]+)", message, re.I)
+    if storage and len(storage_ids) == 1:
+        updated = apply_answer(updated, storage_ids[0], storage[1].strip())
     people = re.search(
-        r"\b([0-9]{1,9}|один|одна|два|две|три|четыре|пять)\s+"
-        r"(?:сотрудни\w*|человек\w*|файлов\w*\s+пользовател\w*)\b", message, re.I,
+        r"(?<![\w-])([0-9]{1,9}|" + "|".join(USER_COUNT_WORDS) + r")\s+"
+        r"(?:сотрудни\w*|человек\w*|людей|(?:файлов\w*\s+)?пользовател\w*)\b", message, re.I,
     )
-    if "manual_users_count" in ids and people:
+    if "manual_users_count" in ids and people and (
+        storage or manual_user_count(message.strip().casefold().rstrip(".!")) is not None
+        or VISIBILITY_CLAIM.fullmatch(message)
+    ):
         count = manual_user_count(people[1].casefold())
         updated = apply_answer(updated, "manual_users_count", count)
-    return updated
+    return updated if updated is not session else None
+
+
+def apply_named_port(session, unresolved, message):
+    match = re.fullmatch(
+        r"\s*порт(?:\s+(TCP|UDP|MQTT|Modbus(?:\s+TCP)?|МЭК[- ]104))?\s*[:=—]?\s*([0-9]{1,5})[.!]?\s*",
+        message, re.I,
+    )
+    if not match or not 1 <= int(match[2]) <= 65535:
+        return session
+    protocol = protocol_name(match[1]) if match[1] else None
+    keys = [f"{flow.id}.port" for flow in session.flows
+            if f"{flow.id}.port" in unresolved and (protocol is None or protocol_name(flow.protocol) == protocol)]
+    if len(keys) == 1:
+        return apply_answer(session, keys[0], int(match[2]))
+    return session
+
+
+VISIBILITY_CLAIM = re.compile(
+        r"\s*(?:(?:\d+|"+ "|".join(USER_COUNT_WORDS) + r")\s+)?(?:пользовател\w*|сотрудник\w*|человек\w*)\s+"
+        r"(не\s+)?(?:могут\s+видеть|видят)(?:\s+(?:принятые\s+)?(?:файлы\s+друг\s+друга|чужие\s+файлы))?"
+        r"(?:\s+(в\s+обоих\s+направлениях|в\s+обе\s+стороны))?[.!]?\s*", re.I)
+
+
+def deferred_visibility(session, questions, message):
+    keys = [q["id"] for q in questions if q["id"].endswith(".access_group")]
+    claim = VISIBILITY_CLAIM.fullmatch(message)
+    if not claim or not keys:
+        return session, None
+    value = False if claim[1] else "shared"
+    if len(keys) == 1 or claim[2]:
+        for key in keys:
+            session = apply_answer(session, key, value)
+        return session, None
+    names = {n.id: n.name for n in session.networks}
+    choices = {}
+    for flow in session.flows:
+        key = f"{flow.id}.access_group"
+        if key in keys:
+            label = f"{names.get(flow.source_network_id, '?')} → {names.get(flow.target_network_id, '?')}"
+            if sum(f.source_network_id == flow.source_network_id and f.target_network_id == flow.target_network_id
+                   for f in session.flows if f"{f.id}.access_group" in keys) > 1:
+                label += f" · {flow.description or 'Файлы'} ({flow.id})"
+            choices[label] = [key]
+    choices["Для всех перечисленных потоков"] = keys
+    return session, {"id": "visibility_scope", "text": "К каким потокам относится этот ответ о видимости файлов?",
+                     "options": list(choices), "choices": choices, "value": value}
 
 
 def unchanged_reply(session_id, text, questions=None):
@@ -311,9 +367,10 @@ def network_limit_reply(session_id, previous, text):
     return {"text": text, "explanation": text, "questions": [], "result": result}
 
 
-def reply_project_facts(outcome, questions):
+def reply_project_facts(session, outcome, questions):
     result = outcome["result"]
     rules = result["rules"][:16]
+    unresolved = [*outcome["questions"], *outcome["deferred_questions"]]
     return {
         "status": result["status"],
         "rules_count": result["rules_count"],
@@ -325,21 +382,58 @@ def reply_project_facts(outcome, questions):
         "rules": rules,
         "rule_details": {rule["id"]: outcome["rule_details"][rule["id"]] for rule in rules},
         "questions": [question["text"] for question in questions[:6]],
+        "unresolved_questions": [{"id": q["id"], "text": q["text"]} for q in unresolved],
+        "unknowns": result["unknowns"],
+        "deferred_answers": [q["id"] for q in outcome["deferred_questions"]],
+        "assumptions": result["assumptions"],
+        "issues": outcome["issues"],
+        "protected_network_id": (result["synonyx"] or {}).get("location"),
+        "file_access": [
+            {"flow_id": flow.id, "access_group": flow.access_group, "separate_file_access": flow.separate_file_access}
+            for flow in session.flows if flow.payload == "files"
+        ],
     }
 
 
+def project_response(outcome, session_id):
+    result = outcome["result"]
+    attach_rule_devices(result, outcome["rule_details"])
+    for rule in result["rules"]:
+        if rule["type"] == "file":
+            details = outcome["rule_details"][rule["id"]]
+            rule["methods_by_node"] = details["methods"]
+            rule["checks_by_node"] = details["checks_by_node"]
+            if any(m["mode"] == "USB" for methods in details["methods"].values() for m in methods):
+                rule["transport"] = "usb"
+    result["usage"] = build_usage(journal, session_id)
+    result["timing"] = build_timing(journal, session_id)
+    placement = explain_placement(result) if result["synonyx"] and result["firewall"] else ""
+    explanation = "\n\n".join(filter(None, (placement, explain_rules(result["rules"], result["networks"]))))
+    return {"result": result, "explanation": explanation}
+
+
 def respond(request, kb):
+    reply = respond_turn(request, kb)
+    session_id = request["session_id"]
+    if request.get("current_result", True) is None and reply.get("result_unchanged") and "result" not in reply:
+        saved = sessions.get(session_id)
+        if saved is not None:
+            reply.update(project_response(evaluate(saved), session_id))
+    return reply
+
+
+def respond_turn(request, kb):
     session_id = request["session_id"]
     message = request["message"]
     turn_id = turns.get(session_id, 0) + 1
     turns[session_id] = turn_id
     previous = sessions.get(session_id)
 
-    def wording(text, event, facts=None):
-        if not MODEL_WORDING_ENABLED:
-            return text
+    def wording(text, event, facts=None, *, generate=True):
+        if facts is None and previous is not None:
+            facts = reply_project_facts(previous, evaluate(previous), shown_questions.get(session_id, []))
         return compose_project_reply(
-            client, request["message"], text, {"event": event, **(facts or {})},
+            client if MODEL_WORDING_ENABLED and generate else None, request["message"], text, {"event": event, **(facts or {})},
             session_id=session_id, turn_id=turn_id,
         )
 
@@ -414,7 +508,7 @@ def respond(request, kb):
         answer, hits = answer_fact(client, message, kb=kb, session_id=session_id, turn_id=turn_id)
         return {"text": answer, "sources": [
             {"file": hit["file"], "section": hit["section"]} for hit in hits
-        ], "result_unchanged": previous is not None, "usage": build_usage(journal, session_id)}
+        ], "questions": pending, "result_unchanged": previous is not None, "usage": build_usage(journal, session_id)}
     if previous is not None and ACKNOWLEDGEMENT.fullmatch(message):
         text = ("Когда будете готовы, ответьте на уточнение."
                 if pending else "Текущая схема сохранена.")
@@ -422,15 +516,14 @@ def respond(request, kb):
     detailed = wants_detailed_explanation(message)
     if previous is not None and not form_reply and (is_project_question(message) or detailed):
         text = explain_current_project(previous, message, pending)
-        if MODEL_WORDING_ENABLED:
-            facts = reply_project_facts(evaluate(previous), pending)
-            facts["methodology"] = (
-                "Число правил для данных зависит от направления и режима, получателя, протокола и порта. "
-                "Разные отправители могут использовать одно правило и остаются отдельными устройствами. NTP считается одним "
-                "однонаправленным правилом. Для файлов учитываются совместимость методов передачи, "
-                "профили проверок и разделение доступа."
-            )
-            text = wording(text, "project_question", facts)
+        facts = reply_project_facts(previous, evaluate(previous), pending)
+        facts["methodology"] = (
+            "Число правил для данных зависит от направления и режима, получателя, протокола и порта. "
+            "Разные отправители могут использовать одно правило и остаются отдельными устройствами. NTP считается одним "
+            "однонаправленным правилом. Для файлов учитываются совместимость методов передачи, "
+            "профили проверок и разделение доступа."
+        )
+        text = wording(text, "project_question", facts)
         return unchanged_reply(session_id, text, pending)
 
     result_visible = request.get("current_result", True) is not None
@@ -439,7 +532,22 @@ def respond(request, kb):
         and message.strip() == last_project_messages.get(session_id)
     )
     session = previous if restoring else None
-    edit = None if restoring or form_reply else edit_project(previous, message, client, turn_id)
+    scope_to_ask = None
+    scope = next((q for q in pending if q["id"] == "visibility_scope"), None)
+    if scope and not restoring:
+        selection = (submitted_answers or {}).get(scope["id"], message).strip().casefold().rstrip(".!")
+        choices = {name.casefold(): keys for name, keys in scope["choices"].items()}
+        if selection in ("в обоих направлениях", "в обе стороны", "оба", "для обоих"):
+            selection = "для всех перечисленных потоков"
+        if selection in choices:
+            session = previous
+            for key in choices[selection]:
+                session = apply_answer(session, key, scope["value"])
+        elif selection == "не знаю":
+            session = previous
+        else:
+            return unchanged_reply(session_id, "Выберите направление или все перечисленные потоки.", pending)
+    edit = None if session is not None or form_reply else edit_project(previous, message, client, turn_id)
     pending_edit = pending_edits.get(session_id)
     adding = not form_reply and bool(ADD_FLOW_REQUEST.match(message))
     if edit is None and not restoring and not form_reply and pending_edit and previous and not adding and is_recipient_reply(message):
@@ -452,6 +560,15 @@ def respond(request, kb):
             pending_edits[session_id] = question[0]
         if session is previous or session is None:
             return unchanged(edit_text, pending)
+    if session is None and previous and not adding and not form_reply:
+        assessment = evaluate(previous)
+        unresolved = assessment["deferred_questions"] + assessment["questions"]
+        updated = apply_named_port(previous, assessment["result"]["unknowns"], message)
+        if previous.unknown_answers and updated is previous:
+            updated = apply_deferred_file_details(previous, unresolved, message) or previous
+            updated, scope_to_ask = deferred_visibility(updated, unresolved, message)
+        if updated is not previous or scope_to_ask:
+            session = updated
     if session is None and previous is not None:
         if not previous.flows and "flows" in previous.unknown_answers and not pending:
             adding = True
@@ -474,7 +591,11 @@ def respond(request, kb):
                 return unchanged_reply(session_id, "Введите число в нужном вопросе, чтобы я понял, к чему оно относится.", pending)
         if session is None and not pending and not adding and previous.unknown_answers:
             deferred = evaluate(previous)["deferred_questions"]
-            session = apply_deferred_file_details(previous, deferred, message)
+            normalized = message.strip().casefold()
+            matching = [q for q in deferred if any(option.casefold() == normalized
+                        for option in q["options"] if option not in ("Не знаю", "Другое", "Да", "Нет"))]
+            if len(matching) == 1:
+                session = apply_form(previous, matching, message)
             if session is None and len(deferred) == 1:
                 only = deferred[0]
                 selected = any(
@@ -596,14 +717,6 @@ def respond(request, kb):
     sessions[session_id] = session
     last_project_messages[session_id] = message.strip()
     result = outcome["result"]
-    attach_rule_devices(result, outcome["rule_details"])
-    for rule in result["rules"]:
-        details = outcome["rule_details"][rule["id"]]
-        if rule["type"] == "file":
-            rule["methods_by_node"] = details["methods"]
-            rule["checks_by_node"] = details["checks_by_node"]
-            if any(m["mode"] == "USB" for methods in details["methods"].values() for m in methods):
-                rule["transport"] = "usb"
     questions = [dict(question) for question in outcome["questions"]]
     flows_by_id = {flow.id: flow for flow in session.flows}
     network_names = {network.id: network.name for network in session.networks}
@@ -639,6 +752,8 @@ def respond(request, kb):
     ]
     if restoring:
         questions = pending
+    elif scope_to_ask:
+        questions = [scope_to_ask]
     # Batch answers from the current frontend include the displayed question text.
     shown_questions[session_id] = questions
     text = f"Рассчитано правил: {result['rules_count']}."
@@ -656,6 +771,8 @@ def respond(request, kb):
     if previous is not None and session.manual_users_count != previous.manual_users_count:
         text += f" Пользователей ручной передачи — {session.manual_users_count}."
     if outcome["minimum_rules_count"] > result["rules_count"]:
+        if text.startswith("Рассчитано правил: 0."):
+            text = text.replace("Рассчитано правил: 0.", "Готовых правил пока нет.", 1)
         minimum = outcome["minimum_rules_count"]
         estimate = "Предварительная оценка: минимум 1 правило." if minimum == 1 else (
             f"Предварительная оценка по числу правил: минимум {minimum}."
@@ -669,18 +786,19 @@ def respond(request, kb):
             text += " Когда появятся сведения об обмене, опишите, что нужно передать, откуда и куда."
     deferred_text = ""
     if outcome["deferred_questions"] and not questions and result["status"] != "unsupported":
-        remaining = []
-        for question in outcome["deferred_questions"]:
-            flow_id, _, field = question["id"].rpartition(".")
-            flow = flows_by_id.get(flow_id)
-            label = question["text"]
-            if flow:
-                label = label.removeprefix(f"Поток {flow_id}. ")
-                label = f"«{flow.description or flow.recipient or flow_id}». {label}"
-            if field == "target_methods":
-                label += " Укажите способ доставки, а для автоматической доставки — протокол и хранилище."
-            remaining.append(f"- {label}")
-        deferred_text = "\n\nОсталось уточнить.\n\n" + "\n".join(remaining)
+        labels = {
+            "access_group": "видимость файлов", "access_groups": "группы доступа",
+            "source_checks": "проверки файлов", "target_checks": "проверки файлов",
+            "source_methods": "способ отправки", "target_methods": "способ доставки",
+            "manual_users_count": "число людей", "protocol": "протокол", "port": "порт",
+            "storage": "хранилище", "protected_network_id": "защищаемая сеть",
+        }
+        keys = [q["id"] for q in outcome["deferred_questions"]]
+        fields = ["source_checks" if k.startswith("file_checks:") else k.rsplit(".", 1)[-1] for k in keys]
+        topics = list(dict.fromkeys(labels.get(field, "параметры обмена") for field in fields))
+        flow = flows_by_id.get(keys[0].rpartition(".")[0]) if len(keys) == 1 else None
+        scope = f" для потока «{flow.description}»" if flow and flow.description else ""
+        deferred_text = f" Отложено до уточнения{scope}: {', '.join(topics)}. К этому можно вернуться позже."
     if questions:
         if result["rules_count"] and all(q["id"].startswith("file_checks:") for q in questions):
             text += " Осталось согласовать настройки проверки файлов."
@@ -688,20 +806,16 @@ def respond(request, kb):
             text += " Для завершения расчёта нужны уточнения."
     if outcome["issues"]:
         text += "\n" + "\n".join(outcome["issues"])
-    if MODEL_WORDING_ENABLED and not restoring:
-        facts = reply_project_facts(outcome, questions)
-        if previous is not None and previous != session:
-            facts["previous_rules"] = previous_outcome["result"]["rules"][:16]
-            facts["previous_rules_count"] = previous_count
-            facts["previous_status"] = previous_outcome["result"]["status"]
-        event = ("unsupported" if result["status"] == "unsupported" else
-                 "updated" if previous is not None and previous != session else "calculated")
-        text = wording(text, event, facts)
+    facts = reply_project_facts(session, outcome, questions)
+    if previous is not None and previous != session:
+        facts["previous_rules"] = previous_outcome["result"]["rules"][:16]
+        facts["previous_rules_count"] = previous_count
+        facts["previous_status"] = previous_outcome["result"]["status"]
+    event = ("unsupported" if result["status"] == "unsupported" else
+             "updated" if previous is not None and previous != session else "calculated")
+    text = wording(text, event, facts, generate=not restoring)
     text += deferred_text
-    result["usage"] = build_usage(journal, session_id)
-    result["timing"] = build_timing(journal, session_id)
-    explanation = "\n\n".join(filter(None, (explain_placement(result) if result["synonyx"] and result["firewall"] else "", explain_rules(result["rules"], result["networks"]))))
-    return {"text": text, "questions": questions, "result": result, "explanation": explanation}
+    return {"text": text, "questions": questions, **project_response(outcome, session_id)}
 
 
 MAX_CHAT_REQUEST_BYTES = 1024 * 1024

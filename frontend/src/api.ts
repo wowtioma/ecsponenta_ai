@@ -4,20 +4,8 @@ import { mockAnswer } from "./mocks";
 // Включается строкой VITE_USE_MOCK=true в файле .env.local (рядом с package.json)
 const USE_MOCK = import.meta.env.VITE_USE_MOCK === "true";
 
-function getSessionId(): string {
-  let id = localStorage.getItem("session_id");
-  if (!id) {
-    id = crypto.randomUUID();
-    localStorage.setItem("session_id", id);
-  }
-  return id;
-}
-
-export function resetSession() {
-  localStorage.removeItem("session_id");
-}
-
 export async function askAi(
+  sessionId: string,
   message: string,
   current: Result | null,
   answers?: Record<string, string>,
@@ -31,7 +19,7 @@ export async function askAi(
     const res = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session_id: getSessionId(), message, current_result: current, answers }),
+      body: JSON.stringify({ session_id: sessionId, message, current_result: current, answers }),
       signal: controller.signal,
     });
 

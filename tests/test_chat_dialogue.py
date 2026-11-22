@@ -161,19 +161,18 @@ class ChatDialogueTests(unittest.TestCase):
         })
         self.assertEqual(methods["result"]["rules_count"], 0)
         self.assertIn("минимум 2", methods["text"])
-        details = self.send("Одинаковые настройки, один сотрудник", {
-            **{question["id"]: "Да" if question["id"].endswith(".access_group") else "Без проверок"
-               for question in methods["questions"] if question["id"] != "manual_users_count"},
-            "manual_users_count": "1",
-        })
-        self.assertEqual({question["id"] for question in details["questions"]}, {
-            "inbound.source_methods.0.protocol", "inbound.source_methods.0.storage",
-            "outbound.target_methods.0.protocol", "outbound.target_methods.0.storage",
-        })
-        done = self.send("Хранилища согласованы", {
+        storage = {
             "inbound.source_methods.0.protocol": "SFTP", "inbound.source_methods.0.storage": "Отчёты цеха",
             "outbound.target_methods.0.protocol": "SMB", "outbound.target_methods.0.storage": "Обновления цеха",
+        }
+        self.assertTrue(storage.keys() <= {q["id"] for q in methods["questions"]})
+        details = self.send("Одинаковые настройки, один сотрудник", {
+            **{q["id"]: "Да" if q["id"].endswith(".access_group") else "Без проверок"
+               for q in methods["questions"] if q["id"].endswith((".access_group", ".source_checks", ".target_checks"))},
+            "manual_users_count": "1",
         })
+        self.assertEqual({q["id"] for q in details["questions"]}, storage.keys())
+        done = self.send("Хранилища согласованы", storage)
         result = done["result"]
         self.assertEqual((result["status"], result["rules_count"], result["file_users_count"]), ("completed", 2, 2))
         self.assertEqual(self.llm.chat.call_count, 1)
@@ -427,6 +426,38 @@ class ChatDialogueTests(unittest.TestCase):
         self.assertEqual(done["result"]["rules"][0]["methods_by_node"]["shop"][0]["storage"], "файловый сервер цеха")
         self.assertEqual(self.llm.chat.call_count, 1)
 
+    def test_combined_deferred_reply_resolves_people_then_only_asks_scope(self):
+        flow = {**FILES, "access_group": None, "target_methods": None, "source_methods": None}
+        reply = self.start(flow, {**flow, "id": "return", "from": "shop", "to": "office"})
+        for _ in range(4):
+            if not reply["questions"]:
+                break
+            reply = self.send("Пока не знаю", {q["id"]: "Не знаю" for q in reply["questions"]})
+        self.assertFalse(reply["questions"])
+        reply = self.send("2 пользователя могут видеть")
+        self.assertEqual(server.sessions[self.session_id].manual_users_count, 2)
+        self.assertEqual([q["id"] for q in reply["questions"]], ["visibility_scope"])
+        with patch.object(server, "answer_fact", return_value=("Ответ из базы", [])) as fact:
+            info = self.send("Что такое Синоникс?")
+            fact.assert_called_once()
+            self.assertTrue(info["result_unchanged"])
+            self.assertEqual(info["questions"][0]["id"], "visibility_scope")
+        done = self.send("В обоих направлениях")
+        self.assertFalse(done["questions"])
+        self.assertTrue(all(f.access_group == "shared" for f in server.sessions[self.session_id].flows))
+        self.assertFalse(any(k.endswith("access_group") or k == "manual_users_count"
+                             for k in done["result"]["unknowns"]))
+        self.assertTrue(done["result"]["unknowns"])
+        self.assertEqual(self.llm.chat.call_count, 1)
+
+    def test_combined_deferred_reply_for_single_file_flow(self):
+        reply = self.start({**FILES, "access_group": None})
+        self.send("Не знаю", {q["id"]: "Не знаю" for q in reply["questions"]})
+        done = self.send("два пользователя могут видеть файлы друг друга")
+        self.assertEqual(server.sessions[self.session_id].manual_users_count, 2)
+        self.assertEqual(server.sessions[self.session_id].flows[0].access_group, "shared")
+        self.assertFalse(done["questions"])
+
     def test_same_checks_are_agreed_once_per_network(self):
         def flow(source, target):
             return {
@@ -505,6 +536,7 @@ class ChatDialogueTests(unittest.TestCase):
         self.assertEqual(current.manual_users_count, 2)
         self.assertEqual(current.flows[-1].source_methods[0].mode, "USB")
         self.assertIn("files.access_groups", [question["id"] for question in reply["questions"]])
+        self.assertNotIn("не согласовано, могут ли пользователи видеть", reply["text"])
         self.send("Отложить группы", {"files.access_groups": "Не знаю"})
         self.assertIn("files.access_groups", self.result["unknowns"])
         self.assertEqual(self.result["rules_count"], 1)
@@ -549,6 +581,65 @@ class ChatDialogueTests(unittest.TestCase):
         self.assertEqual(self.rules(), [("UDP", None)])
         self.assertEqual(self.llm.chat.call_count, 1)
 
+    def test_protocol_is_resolved_before_asking_ntp_specific_details(self):
+        clock = {**CLOCK, "application_protocol": None, "protocol": None,
+                 "port": None, "mode": None, "recipient": None}
+        first = self.start(clock)
+        self.assertEqual([q["id"] for q in first["questions"]], ["clock.protocol"])
+        done = self.send("NTP", {"clock.protocol": "NTP"})
+        self.assertEqual(done["questions"], [])
+        self.assertEqual(done["result"]["status"], "completed")
+        self.assertEqual(self.rules(), [("UDP", None)])
+
+    def test_named_port_is_saved_even_while_receiver_is_deferred(self):
+        first = self.start({**LOGS, "recipient": None, "port": None})
+        self.assertEqual([q["id"] for q in first["questions"]], ["logs.recipient"])
+        second = self.send("Не знаю", {"logs.recipient": "Не знаю"})
+        self.assertEqual([q["id"] for q in second["questions"]], ["logs.port"])
+        done = self.send("Порт UDP: 1514")
+        self.assertEqual(done["questions"], [])
+        self.assertEqual(done["result"]["unknowns"], ["logs.recipient"])
+        self.assertEqual(server.sessions[self.session_id].flows[0].port, 1514)
+        self.assertEqual(self.llm.chat.call_count, 1)
+
+    def test_named_port_disambiguates_two_deferred_ports(self):
+        first = self.start({**LOGS, "port": None}, {**CONTROL, "port": None})
+        self.send("Не знаю", {q["id"]: "Не знаю" for q in first["questions"]})
+        done = self.send("Порт UDP 1514")
+        self.assertEqual(done["questions"], [])
+        self.assertEqual(done["result"]["unknowns"], ["control.port"])
+        self.assertEqual(self.rules(), [("UDP", 1514), ("Modbus TCP", None)])
+
+    def test_two_named_receivers_keep_the_known_port(self):
+        self.start({**LOGS, "recipient": None})
+        count_only = self.send("Две системы", {"logs.recipient": "Две системы"})
+        self.assertTrue(count_only["result_unchanged"])
+        self.assertIn("имена или назначения систем", count_only["text"])
+        named = self.send("Архив; Мониторинг", {"logs.recipient": "Архив; Мониторинг"})
+        self.assertEqual(named["questions"], [])
+        self.assertEqual(named["result"]["status"], "completed")
+        self.assertEqual(self.rules(), [("UDP", LOGS["port"])] * 2)
+        self.assertEqual(self.llm.chat.call_count, 1)
+
+    def test_common_checks_reuse_explicit_profiles_per_network(self):
+        forward = {**FILES, "source_checks": ["Размер"], "target_checks": []}
+        reverse = {**FILES, "id": "return", "from": "shop", "to": "office"}
+        self.script({"networks": NETWORKS, "flows": [forward, reverse]})
+        reply = self.send("На каждой стороне проверки одинаковые. В офисе проверяем размер. "
+                          "На стороне цеха дополнительных проверок нет. Ручных пользователей нет.")
+        self.assertFalse(any("checks" in q["id"] for q in reply["questions"]))
+        received = server.sessions[self.session_id].flows[1]
+        self.assertEqual(received.source_checks, [])
+        self.assertEqual(received.target_checks, ["размер"])
+
+    def test_known_automation_protocol_question_does_not_wait_for_access_answer(self):
+        reply = self.start({**FILES, "access_group": None, "source_checks": [], "target_checks": [],
+                            "target_methods": [{"mode": "PUSH", "storage": "Файловый сервер"}]})
+        keys = {q["id"] for q in reply["questions"]}
+        self.assertIn("files.access_group", keys)
+        self.assertIn("files.target_methods.0.protocol", keys)
+        self.assertNotIn("files.target_methods.0.storage", keys)
+
     def test_combined_form_can_answer_two_flows(self):
         initial = self.start({**LOGS, "port": None}, {**CONTROL, "port": None})
         values = {"logs.port": "1514", "control.port": "1502"}
@@ -565,8 +656,8 @@ class ChatDialogueTests(unittest.TestCase):
             "files.source_checks": "Маска имени, Размер, Внешний антивирус",
             "files.target_checks": "Без проверок", "manual_users_count": "1",
         }
-        self.assertEqual({q["id"] for q in initial["questions"]}, values.keys())
-        batch = "\n".join(f"{q['text']} {values[q['id']]}" for q in initial["questions"])
+        self.assertEqual({q["id"] for q in initial["questions"]}, {*values, "files.target_methods.0.storage"})
+        batch = "\n".join(f"{q['text']} {values[q['id']]}" for q in initial["questions"] if q["id"] in values)
         checks = self.send(batch)
         self.assertEqual(
             [q["id"] for q in checks["questions"]],
@@ -591,6 +682,16 @@ class ChatDialogueTests(unittest.TestCase):
         restored = self.send("Свяжи открытую офисную и закрытую производственную сети.")
         self.assertEqual(restored["text"], "Рассчитано правил: 2.")
         self.assertEqual(restored["result"]["rules"], first["result"]["rules"])
+        self.assertEqual(self.llm.chat.call_count, 1)
+
+    def test_unchanged_reply_recovers_missing_client_result(self):
+        initial = self.start(LOGS)
+        self.result = None
+        reply = self.send("Три компьютера отправляют журналы одному офисному серверу по UDP 514.")
+        self.assertTrue(reply["result_unchanged"])
+        self.assertEqual(reply["result"]["rules"], initial["result"]["rules"])
+        self.assertEqual(reply["result"]["devices"], initial["result"]["devices"])
+        self.assertTrue(reply["explanation"])
         self.assertEqual(self.llm.chat.call_count, 1)
 
     def test_port_edit_is_local_and_repeat_is_idempotent(self):
@@ -874,4 +975,98 @@ class ChatDialogueTests(unittest.TestCase):
         reply = self.send("Объясни подробно правило для журналов.")
         self.assertTrue(reply["result_unchanged"])
         self.assertIn("Сервер журналов", reply["text"])
+
+    def test_n01_deferred_file_access_stays_unknown_in_result_and_reply(self):
+        for enabled in (False, True):
+            with self.subTest(wording=enabled):
+                self.session_id, self.result = uuid.uuid4().hex, None
+                server.MODEL_WORDING_ENABLED = False
+                flow = {**FILES, "source_methods": None, "target_methods": None, "access_group": None}
+                reply = self.start(flow, {**flow, "id": "reverse", "from": "shop", "to": "office"})
+                # The first card only shows transfer methods. Access is already unknown.
+                self.assertNotIn("files.access_group", [q["id"] for q in reply["questions"]])
+                self.assertIn("могут ли пользователи видеть", reply["text"])
+                server.MODEL_WORDING_ENABLED = enabled
+                draft = "Предварительная оценка: минимум 1 правило. Каждый увидит исключительно свои документы."
+                self.script(*[{"text": draft}] * 3)
+                for _ in range(3):
+                    if not reply["questions"]:
+                        break
+                    reply = self.send("Не знаю", {q["id"]: "Не знаю" for q in reply["questions"]})
+                result = reply["result"]
+                self.assertEqual((result["status"], result["rules_count"], result["file_users_count"]),
+                                 ("preliminary", 0, None))
+                self.assertEqual(reply["questions"], [])
+                self.assertTrue({"files.access_group", "reverse.access_group"} <= set(result["unknowns"]))
+                self.assertEqual(result["assumptions"], [])
+                self.assertIn("не согласовано, могут ли пользователи видеть", reply["text"])
+                self.assertNotIn("исключительно свои", reply["text"])
+                if enabled:
+                    facts = json.loads(self.llm.chat.call_args.args[0][1]["content"])["project"]
+                    self.assertIn("files.access_group", facts["deferred_answers"])
+                    self.assertEqual(set(result["unknowns"]), {q["id"] for q in facts["unresolved_questions"]})
+                    self.assertTrue(all(f["access_group"] is None for f in facts["file_access"]))
+
+    def test_direction_alone_does_not_supply_file_methods_or_repeat_skipped_questions(self):
+        guessed = {**FILES, "source_checks": [], "target_checks": [], "access_group": None}
+        self.script({"networks": NETWORKS, "flows": [guessed, {**guessed, "id": "reverse", "from": "shop", "to": "office"}]})
+        initial = self.send("Между офисом и закрытой сетью цеха нужно обмениваться файлами в обе стороны")
+        methods = {q["id"]: "Не знаю" for q in initial["questions"]}
+        self.assertEqual(set(methods), {f"{flow}.{side}_methods" for flow in ("files", "reverse")
+                                        for side in ("source", "target")})
+        next_card = self.send("Способы пока неизвестны", methods)
+        answers = {q["id"]: "Не знаю" for q in next_card["questions"]}
+        self.assertTrue({"files.source_checks", "files.target_checks",
+                         "reverse.source_checks", "reverse.target_checks"} <= answers.keys())
+        self.assertIn("manual_users_count", answers)
+        answers["manual_users_count"] = "2"
+        final = self.send("Ответы на оставшиеся вопросы", answers)
+        self.assertEqual(final["questions"], [])
+        self.assertEqual(server.sessions[self.session_id].manual_users_count, 2)
+        self.assertEqual(final["result"]["status"], "preliminary")
+        self.assertEqual(final["result"]["rules_count"], 0)
+        self.assertTrue(set(methods) <= set(final["result"]["unknowns"]))
+        self.assertIn("минимум 1 правило", final["text"])
+        self.assertIn("проверки файлов", final["text"])
+        self.assertNotIn("?", final["text"])
+
+    def test_u04_two_open_networks_require_a_confirmed_protected_side(self):
+        networks = [{**n, "trust": "open"} for n in NETWORKS]
+        for enabled in (False, True):
+            with self.subTest(wording=enabled):
+                self.session_id, self.result = uuid.uuid4().hex, None
+                server.MODEL_WORDING_ENABLED = False
+                self.script({"networks": networks, "flows": [LOGS]})
+                first = self.send("Обе сети открытые, офис и цех. Журналы из цеха в офис по UDP 1514.")
+                self.assertEqual([q["id"] for q in first["questions"]], ["protected_network_id"])
+                server.MODEL_WORDING_ENABLED = enabled
+                self.script({"text": "Рассчитано одно правило. За периметром у нас останется только цех."})
+                reply = self.send("Не знаю", {"protected_network_id": "Не знаю"})
+                result = reply["result"]
+                self.assertEqual((result["status"], result["rules_count"]), ("preliminary", 1))
+                self.assertEqual([n["trust"] for n in result["networks"]], ["open", "open"])
+                self.assertEqual(result["unknowns"], ["protected_network_id"])
+                self.assertEqual(result["assumptions"], [])
+                self.assertIsNone(result["firewall"])
+                self.assertIsNone(result["synonyx"])
+                self.assertIn("Обе сети указаны как открытые.", reply["text"])
+                self.assertIn("Защищаемая сторона пока не определена.", reply["text"])
+                self.assertNotIn("За периметром", reply["text"])
+                if enabled:
+                    facts = json.loads(self.llm.chat.call_args.args[0][1]["content"])["project"]
+                    self.assertIsNone(facts["protected_network_id"])
+                    self.assertEqual(facts["deferred_answers"], ["protected_network_id"])
+                self.script({"text": "Для обмена между офисом и цехом рассчитано одно правило."})
+                agreed = self.send("Офисная сеть")
+                self.assertEqual(agreed["result"]["synonyx"]["location"], "office")
+                self.assertNotIn("protected_network_id", agreed["result"]["unknowns"])
+                self.assertNotIn("пока не определена", agreed["text"])
+                if enabled:
+                    self.script({"text": "Защищаемая сеть — цех. Рассчитано одно правило."})
+                    followup = self.send("Почему в текущей схеме одно правило?")
+                    self.assertNotIn("Защищаемая сеть — цех", followup["text"])
+                    self.assertEqual(self.result["synonyx"]["location"], "office")
+                    self.script({"text": "В этом проекте защищаем сеть «Офисная сеть»."})
+                    confirmed = self.send("Какую сеть защищаем в текущем проекте?")
+                    self.assertEqual(confirmed["text"], "В этом проекте защищаем сеть «Офисная сеть».")
         self.assertEqual(self.rules(), [("UDP", 1514)])

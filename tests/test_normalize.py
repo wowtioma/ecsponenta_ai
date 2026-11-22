@@ -14,6 +14,17 @@ class TestNormalizeFlows(unittest.TestCase):
     def _data(self, flows, networks=None):
         return {"networks": networks or [dict(n) for n in NETWORKS], "flows": flows}
 
+    def test_explicit_usb_and_smb_repair_a_same_network_extraction(self):
+        data = self._data([{"type": "file", "from": "closed", "to": "closed",
+                            "source_methods": [{"mode": "manual", "protocol": "SFTP"}]}])
+        _normalize_flows(data, "Обновления приносит подрядчик на флешке. После проверки внешним "
+                               "антивирусом они должны автоматически попадать на файловый сервер цеха по SMB, "
+                               "из цеха на флешку ничего не выгружается.")
+        flow = data["flows"][0]
+        self.assertEqual((flow["from"], flow["to"]), ("open", "closed"))
+        self.assertEqual(flow["source_methods"][0]["mode"], "USB")
+        self.assertEqual(flow["target_methods"][0]["protocol"], "SMB")
+
     def test_port_validation(self):
         d = self._data([{"port": "502"}, {"port": 99999}, {"port": "abc"}, {"port": 0}])
         _normalize_flows(d)

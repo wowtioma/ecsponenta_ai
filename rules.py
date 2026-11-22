@@ -81,7 +81,29 @@ class Session(Model):
             refs = (flow.source_network_id, flow.target_network_id, flow.initiator_network_id)
             if any(ref is not None and ref not in networks for ref in refs):
                 raise ValueError(f"Поток {flow.id} ссылается на неизвестную сеть.")
+        if self.assumptions.get("same_file_checks") == "yes":
+            self._reuse_common_file_checks()
         return self
+
+    def _reuse_common_file_checks(self):
+        checks_by_network = defaultdict(set)
+        sides = (("source_network_id", "source_checks"), ("target_network_id", "target_checks"))
+        files = [flow for flow in self.flows if flow.payload == "files"]
+        for flow in files:
+            for endpoint, field in sides:
+                network, checks = getattr(flow, endpoint), getattr(flow, field)
+                if network is not None and checks is not None:
+                    checks_by_network[network].add(tuple(sorted(set(checks))))
+        for index, flow in enumerate(self.flows):
+            if flow.payload != "files":
+                continue
+            inherited = {}
+            for endpoint, field in sides:
+                profiles = checks_by_network.get(getattr(flow, endpoint), ())
+                if len(profiles) == 1 and getattr(flow, field) is None:
+                    inherited[field] = list(next(iter(profiles)))
+            if inherited:
+                self.flows[index] = flow.model_copy(update=inherited)
 
 
 QUESTIONS = {
@@ -90,7 +112,8 @@ QUESTIONS = {
     "source_network_id": ("Из какой сети идёт поток?", ()),
     "target_network_id": ("В какую сеть идёт поток?", ()),
     "initiator_network_id": ("Какая сеть инициирует соединение?", ()),
-    "recipient": ("Какая система принимает данные? Укажите её имя или назначение.", ()),
+    "recipient": ("Какие системы принимают данные? Укажите имя или назначение каждой. "
+                  "Если систем несколько, разделите их точкой с запятой.", ()),
     "source_device": ("Какая система на противоположной от инициатора стороне принимает соединение?", ()),
     "protocol": ("Какой протокол используется?", PROTOCOLS),
     "port": ("Какой порт принимает соединение?", ()),
@@ -244,12 +267,11 @@ def evaluate(session: Session) -> dict:
         if flow.payload == "data":
             if flow.protocol is None:
                 missing(flow, "protocol")
-                protocol = None
-            else:
-                protocol = protocol_name(flow.protocol)
-                if protocol not in PROTOCOLS:
-                    issues.append(f"Поток {flow.id}: протокол {protocol} вне поддерживаемых режимов расчёта.")
-                    continue
+                continue
+            protocol = protocol_name(flow.protocol)
+            if protocol not in PROTOCOLS:
+                issues.append(f"Поток {flow.id}: протокол {protocol} вне поддерживаемых режимов расчёта.")
+                continue
             if protocol == "NTP":
                 if synonyx and target != synonyx["node_b"]:
                     issues.append(f"Поток {flow.id}: NTP направляется в защищаемую сеть.")
@@ -262,6 +284,7 @@ def evaluate(session: Session) -> dict:
                     mode = "one_way"
                 if mode is None:
                     missing(flow, "direction")
+                    continue
                 if mode == "two_way" and flow.reverse_forbidden:
                     issues.append(f"Поток {flow.id}: двунаправленный режим конфликтует с запретом обратного обмена.")
                     continue
@@ -270,18 +293,21 @@ def evaluate(session: Session) -> dict:
                 if mode == "two_way":
                     if flow.initiator_network_id not in (source, target):
                         missing(flow, "initiator_network_id")
+                        continue
                     elif flow.initiator_network_id == target:
                         source, target = target, source
                         recipient = flow.source_device
                         recipient_field = "source_device"
                 if not recipient or not recipient.strip():
                     missing(flow, recipient_field)
-            if len(questions) != before:
-                continue
+                    if f"{flow.id}.{recipient_field}" not in session.unknown_answers:
+                        continue
             if flow.port is None and protocol != "NTP":
                 missing(flow, "port")
                 if f"{flow.id}.port" not in session.unknown_answers:
                     continue
+            if protocol != "NTP" and (not recipient or not recipient.strip()):
+                continue
             port_key = (
                 None if protocol == "NTP" else flow.port if flow.port is not None else flow.id
             )
@@ -320,7 +346,7 @@ def evaluate(session: Session) -> dict:
                         "Назовите группы, которые должны получать файлы отдельно. Перечислите через запятую.")
                 else:
                     missing(flow, field)
-        missing_methods = len(questions) != before
+        missing_transfer = not flow.direction or not flow.source_methods or not flow.target_methods
         missing_checks = [field for field in ("source_checks", "target_checks") if getattr(flow, field) is None]
         same_checks = session.assumptions.get("same_file_checks") == "yes"
         for field in missing_checks:
@@ -331,7 +357,7 @@ def evaluate(session: Session) -> dict:
                     QUESTIONS[field][1])
             else:
                 missing(flow, field)
-        if missing_methods or (missing_checks and not same_checks):
+        if missing_transfer:
             continue
         before = len(questions)
         if flow.direction == "two_way":
@@ -361,7 +387,7 @@ def evaluate(session: Session) -> dict:
         if invalid:
             issues.extend(invalid)
             continue
-        if len(questions) != before:
+        if len(questions) != before or not flow.access_group or (missing_checks and not same_checks):
             continue
         try:
             candidates = file_candidates(flow)
@@ -534,7 +560,7 @@ def record_unresolved_answer(session: Session, question_id: str, other: str | No
     return session.model_copy(update={"unknown_answers": unknowns, "requests_for_vendor": requests})
 
 
-def _split_file_flow(data, flow, variants, suffix, answered_key):
+def _split_flow(data, flow, variants, suffix, answered_key):
     flow_id = flow["id"]
     ids = {item["id"] for item in data["flows"]}
     deferred = [key for key in data["unknown_answers"]
@@ -572,7 +598,7 @@ def _apply_storage_mapping(data, flow, pairs, question_id):
         {"source_methods": [*source_manual, pull[left]], "target_methods": [*target_manual, push[right]]}
         for left, right in selected
     ]
-    _split_file_flow(data, flow, variants, "route", question_id)
+    _split_flow(data, flow, variants, "route", question_id)
 
 
 def apply_answer(session: Session, question_id: str, value) -> Session:
@@ -615,7 +641,9 @@ def apply_answer(session: Session, question_id: str, value) -> Session:
         if path == ["access_group"] and value is False:
             flow["separate_file_access"] = True
         elif path == ["access_groups"]:
-            _split_file_flow(data, flow, [{"access_group": group} for group in value], "group", question_id)
+            _split_flow(data, flow, [{"access_group": group} for group in value], "group", question_id)
+        elif path in (["recipient"], ["source_device"]) and isinstance(value, list):
+            _split_flow(data, flow, [{path[0]: name} for name in value], "recipient", question_id)
         elif path == ["storage_mapping"]:
             _apply_storage_mapping(data, flow, value, question_id)
         elif len(path) == 1 and path[0] in QUESTIONS:

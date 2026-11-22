@@ -1,7 +1,8 @@
 
 import { create } from "zustand";
+import { createJSONStorage, persist } from "zustand/middleware";
 import type { Message, Result } from "./types";
-import { askAi, resetSession } from "./api";
+import { askAi } from "./api";
 import {
   EMPTY_USAGE,
   mergeUsage,
@@ -9,6 +10,7 @@ import {
 } from "./lib/usage";
 
 type State = {
+  sessionId: string;
   messages: Message[];
   result: Result | null;
   explanation: string;
@@ -29,7 +31,7 @@ type State = {
   reset: () => void;
 };
 
-export const useStore = create<State>((set, get) => {
+export const useStore = create<State>()(persist((set, get) => {
   // Защита от записи ответа старого запроса после сброса сессии
   let activeRequest = 0;
 
@@ -45,7 +47,8 @@ export const useStore = create<State>((set, get) => {
     }));
 
     try {
-      const reply = await askAi(text, get().result, answers);
+      const { sessionId, result } = get();
+      const reply = await askAi(sessionId, text, result, answers);
 
       // Игнорируем ответ, если сессия уже была сброшена
       if (requestId !== activeRequest) return;
@@ -131,6 +134,7 @@ export const useStore = create<State>((set, get) => {
   };
 
   return {
+    sessionId: crypto.randomUUID(),
     messages: [],
     result: null,
     explanation: "",
@@ -176,19 +180,37 @@ export const useStore = create<State>((set, get) => {
       // Инвалидируем все незавершённые запросы
       activeRequest++;
 
-      resetSession();
-
       set({
+        sessionId: crypto.randomUUID(),
         messages: [],
         result: null,
         explanation: "",
         loading: false,
         lastText: null,
-    lastAnswers: undefined,
+        lastAnswers: undefined,
         timings: [],
         usage: EMPTY_USAGE,
         resultIsStale: false,
       });
     },
   };
-});
+}, {
+  name: "synonyx:chat",
+  storage: createJSONStorage(() => ({
+    getItem: (key) => sessionStorage.getItem(key),
+    setItem: (key, value) => {
+      try {
+        sessionStorage.setItem(key, value);
+      } catch {
+        // A full or unavailable browser store must not interrupt the chat.
+      }
+    },
+    removeItem: (key) => sessionStorage.removeItem(key),
+  })),
+  partialize: ({
+    sessionId, messages, result, explanation, lastText, lastAnswers, timings, usage, loading, resultIsStale,
+  }) => ({
+    sessionId, messages, result, explanation, lastText, lastAnswers, timings, usage,
+    resultIsStale: resultIsStale && !loading,
+  }),
+}));
