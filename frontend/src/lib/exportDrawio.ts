@@ -12,6 +12,10 @@ import type {
   DiagramRect,
 } from "./diagram";
 
+import {
+  CORE_CELL_STYLE,
+} from "./drawioGuards";
+
 // ============================================================
 // XML ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 // ============================================================
@@ -83,6 +87,7 @@ function createText(
     bold?: boolean;
     align?: "left" | "center" | "right";
     fontStyle?: string;
+    extraStyle?: string;
   } = {},
 ): string {
   const style =
@@ -95,7 +100,8 @@ function createText(
     `fontColor=${color};` +
     `fontSize=${fontSize};` +
     `fontFamily=${options.fontStyle ?? "Open Sans"};` +
-    `fontStyle=${options.bold ? 1 : 0};`;
+    `fontStyle=${options.bold ? 1 : 0};` +
+    (options.extraStyle ?? "");
 
   return createVertex(id, escapeHtml(value), rect, style);
 }
@@ -304,7 +310,8 @@ function createSynonyxBox(
       `fillColor=${DIAGRAM_THEME.synonyx.background};` +
       `strokeColor=${DIAGRAM_THEME.synonyx.border};` +
       "strokeWidth=2;" +
-      "html=1;",
+      "html=1;" +
+      CORE_CELL_STYLE,
   );
 }
 
@@ -332,7 +339,8 @@ function createSynonyxNode(
     "fontStyle=1;" +
     "fontFamily=Open Sans;" +
     "align=center;" +
-    "verticalAlign=middle;";
+    "verticalAlign=middle;" +
+    CORE_CELL_STYLE;
 
   return createVertex(
     id,
@@ -359,6 +367,7 @@ function createSynonyx(
       {
         bold: true,
         align: "center",
+        extraStyle: CORE_CELL_STYLE,
       },
     ),
   );

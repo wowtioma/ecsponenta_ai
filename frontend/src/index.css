@@ -1643,6 +1643,17 @@ body.is-resizing {
   vertical-align: middle;
 }
 
+/* Сообщение о восстановлении закреплённых блоков «Синоникса» */
+.drawio-editor__notice {
+  padding: 8px 12px;
+  border: 1px solid #e06733;
+  border-radius: 10px;
+  background: #354552;
+  color: #ffffff;
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
 .drawio-editor__frame {
   position: relative;
   height: min(72vh, 780px);

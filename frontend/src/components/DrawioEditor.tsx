@@ -12,6 +12,10 @@ import {
   loadDrawioDocument,
   storeDrawioXml,
 } from "../lib/drawioDocument";
+import {
+  missingCoreCells,
+  restoreCoreCells,
+} from "../lib/drawioGuards";
 import DiagramPreview from "./DiagramPreview";
 
 type EditorStatus = "loading" | "ready" | "unavailable";
@@ -35,12 +39,14 @@ export default function DrawioEditor({
   const [status, setStatus] = useState<EditorStatus>("loading");
   const [expanded, setExpanded] = useState(false);
   const [attempt, setAttempt] = useState(0);
+  const [notice, setNotice] = useState<string | null>(null);
   const [dark, setDark] = useState(
     () => document.documentElement.dataset.theme === "dark",
   );
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const xmlRef = useRef(xml);
+  const lastGoodRef = useRef(xml);
   const exportId = useRef(0);
   const origin = getEditorOrigin();
   const editorUrl = buildEditorUrl(dark);
@@ -92,6 +98,30 @@ export default function DrawioEditor({
           const next = decodeDrawioXml(message.xml);
           if (!next || next === xmlRef.current) break;
 
+          // Ядро, Узлы А/Б и блок «Синоникс» удалять нельзя: если редактор
+          // всё же вернул XML без них, восстанавливаем ячейки из эталона
+          // и перезагружаем схему (остальные правки сохраняются).
+          const missing = missingCoreCells(next);
+
+          if (missing.length > 0) {
+            const repaired = restoreCoreCells(
+              next,
+              lastGoodRef.current,
+              missing,
+            );
+
+            exportId.current += 1;
+            xmlRef.current = repaired;
+            setXml(repaired);
+            storeDrawioXml(documentKey, repaired);
+            setNotice(
+              "Ядро и узлы «Синоникса» закреплены — их нельзя удалять. Блоки восстановлены.",
+            );
+            load(repaired);
+            break;
+          }
+
+          lastGoodRef.current = next;
           exportId.current += 1;
           xmlRef.current = next;
           setXml(next);
@@ -125,6 +155,12 @@ export default function DrawioEditor({
     return () => window.clearTimeout(timer);
   }, [frameKey, status]);
 
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(null), 6000);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
+
   const isExpanded = expanded && !preview;
   useEffect(() => {
     if (!isExpanded) return;
@@ -139,6 +175,7 @@ export default function DrawioEditor({
     const generated = buildDrawioXml(result);
     exportId.current += 1;
     xmlRef.current = generated;
+    lastGoodRef.current = generated;
     setXml(generated);
     clearStoredDrawioXml(documentKey);
     if (status === "ready") load(generated);
@@ -188,6 +225,12 @@ export default function DrawioEditor({
           </div>
         </div>
 
+        {notice && (
+          <div className="drawio-editor__notice" role="status">
+            {notice}
+          </div>
+        )}
+
         <div className="drawio-editor__frame">
           <iframe
             key={frameKey}
@@ -218,8 +261,10 @@ export default function DrawioEditor({
           )}
         </div>
         <div className="diagram-note">
-          Правки сохраняются в этом браузере и входят в файл .drawio.
-          Чтобы изменить расчёт правил, уточните параметры обмена в чате.
+          Ядро, Узлы А/Б и блок «Синоникс» закреплены: их нельзя удалить или
+          сдвинуть. Остальные блоки и подписи редактируются. Правки сохраняются
+          в этом браузере и входят в файл .drawio. Чтобы изменить расчёт правил,
+          уточните параметры обмена в чате.
         </div>
       </div>
 
