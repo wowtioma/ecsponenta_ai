@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Result } from "../types";
 import { buildDrawioXml, downloadDrawioXml } from "../lib/exportDrawio";
 import {
@@ -34,7 +34,20 @@ export default function DrawioEditor({
   preview: boolean;
   onPreview: () => void;
 }) {
-  const [xml, setXml] = useState(() => loadDrawioDocument(result, documentKey));
+  const canonicalXml = useMemo(() => buildDrawioXml(result), [result]);
+
+  const [xml, setXml] = useState(() => {
+    const stored = loadDrawioDocument(result, documentKey);
+    const missing = missingCoreCells(stored);
+
+    if (missing.length === 0) return stored;
+
+    const repaired = restoreCoreCells(stored, canonicalXml, missing);
+
+    // Если восстановить не удалось (в сохранённом XML нет даже <root>),
+    // показываем эталонную схему — пустой холст хуже потери правок.
+    return missingCoreCells(repaired).length === 0 ? repaired : canonicalXml;
+  });
   const [svg, setSvg] = useState<{ url: string; xml: string; frame: string }>();
   const [status, setStatus] = useState<EditorStatus>("loading");
   const [expanded, setExpanded] = useState(false);
@@ -110,14 +123,20 @@ export default function DrawioEditor({
               missing,
             );
 
+            // Если ячейки восстановить не из чего — берём эталонную схему.
+            const fixed =
+              missingCoreCells(repaired).length === 0
+                ? repaired
+                : canonicalXml;
+
             exportId.current += 1;
-            xmlRef.current = repaired;
-            setXml(repaired);
-            storeDrawioXml(documentKey, repaired);
+            xmlRef.current = fixed;
+            setXml(fixed);
+            storeDrawioXml(documentKey, fixed);
             setNotice(
               "Ядро и узлы «Синоникса» закреплены — их нельзя удалять. Блоки восстановлены.",
             );
-            load(repaired);
+            load(fixed);
             break;
           }
 
@@ -141,7 +160,7 @@ export default function DrawioEditor({
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [documentKey, frameKey, load, origin]);
+  }, [canonicalXml, documentKey, frameKey, load, origin]);
 
   useEffect(() => {
     if (!preview || status !== "ready") return;
@@ -161,8 +180,13 @@ export default function DrawioEditor({
     return () => window.clearTimeout(timer);
   }, [notice]);
 
-  const isExpanded = expanded && !preview;
+  // Если в сохранённой схеме не было закреплённых блоков, фиксируем
+  // восстановленный вариант, чтобы пустой холст не вернулся после F5.
   useEffect(() => {
+    storeDrawioXml(documentKey, xmlRef.current);
+  }, [documentKey]);
+
+  const isExpanded = expanded && !preview;  useEffect(() => {
     if (!isExpanded) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") setExpanded(false);
@@ -172,7 +196,7 @@ export default function DrawioEditor({
   }, [isExpanded]);
 
   const reset = () => {
-    const generated = buildDrawioXml(result);
+    const generated = canonicalXml;
     exportId.current += 1;
     xmlRef.current = generated;
     lastGoodRef.current = generated;
